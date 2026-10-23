@@ -18,14 +18,26 @@ const path = require('node:path');
       packaged: app.isPackaged,
       userData: app.getPath('userData'),
       version: app.getVersion(),
+      visible: BrowserWindow.getAllWindows()[0].isVisible(),
       sandbox: BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox,
     }));
     assert.equal(metadata.packaged, true);
     assert.equal(metadata.sandbox, true);
+    assert.equal(metadata.version, require('../package.json').version);
+    assert.equal(metadata.visible, true);
     assert.equal(path.resolve(metadata.userData).toLowerCase(), userData.toLowerCase(), 'packaged smoke must use an isolated profile');
     await page.waitForSelector('.agent-card', { timeout: 20000 });
     assert.equal(await page.locator('.agent-card').count(), 6);
     assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
+    const snapshot = await page.evaluate(() => window.consoleApi.snapshot());
+    const claude = snapshot.agents.find(a=>a.id==='claude');
+    assert.equal(claude.executableApproved,false,'discovery in a new profile must not grant permission');
+    if (process.env.CONSOLE_EXPECT_NPM_VERSION) {
+      assert.equal(claude.npmCandidate?.packageVersion,process.env.CONSOLE_EXPECT_NPM_VERSION);
+      await page.locator('.agent-card').filter({hasText:'Claude Code CLI'}).getByRole('button',{name:/查看检查与配置/}).click();
+      await page.getByRole('button',{name:'授权检测到的 npm 安装',exact:true}).waitFor();
+      await page.getByRole('button',{name:'关闭详情',exact:true}).click();
+    }
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.getByRole('button', { name: '集成能力', exact: true }).click();

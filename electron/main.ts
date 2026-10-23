@@ -9,6 +9,7 @@ import { ConsoleService } from "./service";
 import { Processes } from "./processes";
 import { noLinks } from "./safety";
 import type { AgentId, PickKind, PathKind } from "../src/shared";
+import type { ClaudeNpmInstallation } from "./claude-npm";
 
 app.setName("Agent Memory Console");
 const testData = !app.isPackaged ? process.env.CONSOLE_TEST_DATA : undefined;
@@ -45,6 +46,8 @@ const confirm = async (message: string, detail: string) => {
   });
   return result.response === 1;
 };
+const npmDescription = (npm: ClaudeNpmInstallation) =>
+  `npm 包：@anthropic-ai/claude-code ${npm.packageVersion}\n安装入口：${npm.launcher}\n实际程序：${npm.entry}${npm.node ? "\nNode.js：" + npm.node : ""}\n\n将直接启动以上程序，不执行 CMD 脚本。请确认安装来源可信；包名与格式检查不验证厂商签名。`;
 function trusted(event: IpcMainInvokeEvent) {
   if (
     event.sender !== window.webContents ||
@@ -71,6 +74,13 @@ function handler(
 }
 function register() {
   handler("snapshot", () => service.snapshot(processes.snapshot()), false);
+  handler("approveNpm", async () => {
+    const npm = service.npmCandidate();
+    if (!npm) throw new Error("未发现可用 npm 安装，请手动选择 claude.cmd");
+    if (!(await confirm("授权检测到的 npm 安装", npmDescription(npm)))) return { message: "未授权 npm 安装" };
+    service.bindNpm(npm);
+    return { message: `已授权 Claude Code npm ${npm.packageVersion}；请选择工作目录后运行任务` };
+  });
   handler("pick", async (id: unknown, kind: unknown) => {
     const kinds: PickKind[] = [
       "memory",
@@ -86,21 +96,29 @@ function register() {
     if (k.startsWith("canonical") !== (agent === null))
       throw new Error("路径参数无效");
     const folder = ["skills", "workspace", "canonicalSkills"].includes(k);
+    const npmAllowed = agent === "claude" && k === "executable";
     const chosen = await dialog.showOpenDialog(window, {
       title: `选择${k}（本地路径）`,
       properties: [folder ? "openDirectory" : "openFile"],
+      defaultPath: npmAllowed ? service.npmCandidate()?.launcher : undefined,
       filters: folder
         ? undefined
         : [
             {
-              name: k === "executable" ? "Windows 程序" : "Markdown",
-              extensions: [k === "executable" ? "exe" : "md"],
+              name: npmAllowed ? "Claude 程序 / npm claude.cmd" : k === "executable" ? "Windows 程序" : "Markdown",
+              extensions: npmAllowed ? ["exe", "cmd"] : [k === "executable" ? "exe" : "md"],
             },
           ],
     });
     if (chosen.canceled || !chosen.filePaths[0])
       return { message: "已取消选择" };
     const file = chosen.filePaths[0];
+    if (npmAllowed && path.extname(file).toLowerCase() === ".cmd") {
+      const npm = service.resolveNpm(file);
+      if (!(await confirm("授权 npm 安装", npmDescription(npm)))) return { message: "未授权 npm 安装" };
+      service.bindNpm(npm);
+      return { message: `已授权 Claude Code npm ${npm.packageVersion}` };
+    }
     if (
       !(await confirm(
         "授权此路径",
@@ -146,11 +164,11 @@ function register() {
   handler("launch", async (id: unknown, prompt: unknown) => {
     const agent = validId(id);
     const input = prompt === undefined ? undefined : str(prompt);
-    const { adapter, config } = processes.validate(agent, input);
+    const { adapter, config, executable } = processes.validate(agent, input);
     if (
       !(await confirm(
         `启动 ${adapter.name}`,
-        `程序：${config.executable}\n目录：${config.workspace}\n\n${adapter.mode === "cli" ? "将向已安装的 Claude CLI 发送单次任务。可能产生费用、联网和文件修改，沿用 CLI 本身的权限规则。\n\n任务：" + input : "此第三方程序将以当前用户权限运行。程序退出启动器后，控制台无法追踪其独立子进程。"}`,
+        `程序：${executable}${config.claudeNpm?.kind === "node" ? "\nCLI 入口：" + config.claudeNpm.entry : ""}\n目录：${config.workspace}\n\n${adapter.mode === "cli" ? "将向已安装的 Claude CLI 发送单次任务。可能产生费用、联网和文件修改，沿用 CLI 本身的权限规则。\n\n任务：" + input : "此第三方程序将以当前用户权限运行。程序退出启动器后，控制台无法追踪其独立子进程。"}`,
       ))
     )
       return { message: "已取消启动" };
@@ -204,7 +222,7 @@ else {
           : os.homedir();
       service = new ConsoleService(
         path.join(app.getPath("userData"), "console-data"),
-        createAdapters(home, path.join(home, "AppData", "Local")),
+        createAdapters(home, path.join(home, "AppData", "Local"), !app.isPackaged && process.env.CONSOLE_TEST_HOME ? {} : process.env),
         [
           app.getAppPath(),
           path.dirname(process.execPath),

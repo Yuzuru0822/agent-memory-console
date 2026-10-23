@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Adapter } from "./adapters";
+import { discoverClaudeNpm, resolveClaudeNpm, validateClaudeNpm, type ClaudeNpmInstallation } from "./claude-npm";
 import {
   atomicWrite,
   digest,
@@ -83,9 +84,25 @@ export class ConsoleService {
     return {
       memory: c.memory || this.candidate(a.memory),
       skills: c.skills || this.candidate(a.skills),
-      executable: c.executable || this.candidate(a.executables),
+      executable: c.claudeNpm?.launcher || c.executable || this.candidate(a.executables),
       workspace: c.workspace,
     };
+  }
+  npmCandidate(): ClaudeNpmInstallation | undefined {
+    const options = this.adapter("claude").npmDiscovery;
+    return options ? discoverClaudeNpm(options) : undefined;
+  }
+  resolveNpm(selected: string): ClaudeNpmInstallation {
+    return resolveClaudeNpm(selected, this.adapter("claude").npmDiscovery || { prefixes: [], nodeCandidates: [] });
+  }
+  bindNpm(installation: ClaudeNpmInstallation): void {
+    if (!this.verifyAudit().valid) throw new Error("活动台账校验失败，已阻止授权变更");
+    const approved = validateClaudeNpm(installation, this.adapter("claude").npmDiscovery || { prefixes: [], nodeCandidates: [] });
+    const c = { ...this.settings("claude"), claudeNpm: approved };
+    delete c.executable;
+    this.config.agents.claude = c;
+    this.save();
+    this.audit("path.bind", `claude · npm ${approved.packageVersion} · ${approved.entry}${approved.node ? " · node=" + approved.node : ""}`);
   }
   private ensureWritable(p: string): void {
     noLinks(p);
@@ -113,6 +130,10 @@ export class ConsoleService {
     this.plans.clear();
   }
   bind(id: AgentId | null, kind: PickKind, selected: string): void {
+    if (kind === "executable" && id === "claude" && path.extname(selected).toLowerCase() === ".cmd") {
+      this.bindNpm(this.resolveNpm(selected));
+      return;
+    }
     if (
       ![
         "memory",
@@ -145,6 +166,7 @@ export class ConsoleService {
       if (!id) throw new Error("请选择 Agent");
       const c = this.settings(id);
       this.config.agents[id] = { ...c, [kind]: p };
+      if (kind === "executable") delete this.config.agents[id]!.claudeNpm;
     }
     this.save();
     this.audit("path.bind", `${id || "shared"} · ${kind} · ${p}`);
@@ -156,6 +178,7 @@ export class ConsoleService {
       throw new Error("活动台账校验失败，已阻止授权变更");
     const c = this.settings(id);
     delete c[kind];
+    if (kind === "executable") delete c.claudeNpm;
     this.save();
     this.audit("path.clear", `${id} · ${kind}`);
   }
@@ -241,7 +264,9 @@ export class ConsoleService {
           memory,
           skills,
           executable,
-          executableApproved: !!c.executable,
+          executableApproved: !!(c.executable || c.claudeNpm),
+          npmCandidate: a.id === "claude" ? this.npmCandidate() : undefined,
+          npmInstallation: a.id === "claude" ? c.claudeNpm : undefined,
           memoryApproved: !!c.memory,
           skillsApproved: !!c.skills,
           workspace: c.workspace,

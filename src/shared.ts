@@ -1,3 +1,5 @@
+import type { ClaudeNpmInstallation } from "../electron/claude-npm";
+
 export type AgentId =
   "claude" | "workbuddy" | "trae" | "deepseek" | "zcode" | "qwen";
 export type PathKind = "memory" | "skills" | "executable" | "workspace";
@@ -7,6 +9,7 @@ export interface AgentConfig {
   skills?: string;
   executable?: string;
   workspace?: string;
+  claudeNpm?: ClaudeNpmInstallation;
 }
 export interface Config {
   version: 1;
@@ -44,6 +47,8 @@ export interface AgentView {
   skills: SkillsInfo;
   executable?: string;
   executableApproved: boolean;
+  npmCandidate?: ClaudeNpmInstallation;
+  npmInstallation?: ClaudeNpmInstallation;
   memoryApproved: boolean;
   skillsApproved: boolean;
   workspace?: string;
@@ -108,6 +113,7 @@ export interface Result {
 export interface ConsoleApi {
   snapshot(): Promise<Snapshot>;
   pick(id: AgentId | null, kind: PickKind): Promise<Result>;
+  approveNpm(): Promise<Result>;
   clear(id: AgentId, kind: PathKind): Promise<Result>;
   preview(mode: "memory" | "skills", ids: AgentId[]): Promise<Plan>;
   apply(planId: string): Promise<Result>;
@@ -125,3 +131,4 @@ declare global {
     consoleApi?: ConsoleApi;
   }
 }
+

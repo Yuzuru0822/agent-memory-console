@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentId, AgentView } from "../src/shared";
 import { nativeExecutable, noLinks } from "./safety";
 import type { ConsoleService } from "./service";
+import { validateClaudeNpm } from "./claude-npm";
 
 export class Processes {
   private children = new Map<AgentId, ChildProcess>();
@@ -21,17 +21,23 @@ export class Processes {
       config = this.service.settings(id);
     if (this.children.has(id))
       throw new Error("此 Agent 已有一个由控制台启动的进程");
-    if (!config.executable || !config.workspace)
-      throw new Error("请先选择并授权 EXE 与工作目录");
-    noLinks(config.executable);
+    if ((!config.executable && !config.claudeNpm) || !config.workspace)
+      throw new Error("请先选择并授权程序与工作目录");
     noLinks(config.workspace);
-    if (
-      path.extname(config.executable).toLowerCase() !== ".exe" ||
-      !fs.statSync(config.executable).isFile() ||
-      !fs.statSync(config.workspace).isDirectory()
-    )
+    if (!fs.statSync(config.workspace).isDirectory())
       throw new Error("程序或工作目录已失效");
-    nativeExecutable(config.executable);
+    let executable: string;
+    let args: string[];
+    if (config.claudeNpm) {
+      if (id !== "claude") throw new Error("仅 Claude 支持 npm 安装");
+      const npm = validateClaudeNpm(config.claudeNpm, adapter.npmDiscovery || { prefixes: [], nodeCandidates: [] });
+      executable = npm.kind === "node" ? npm.node! : npm.entry;
+      args = npm.kind === "node" ? [npm.entry, "-p"] : ["-p"];
+    } else {
+      executable = config.executable!;
+      nativeExecutable(executable);
+      args = adapter.mode === "cli" ? ["-p"] : [];
+    }
     if (
       adapter.mode === "cli" &&
       (typeof prompt !== "string" || !prompt.trim() || prompt.length > 16000)
@@ -39,20 +45,25 @@ export class Processes {
       throw new Error("请输入 1–16000 字符的 Claude 任务");
     if (!this.service.verifyAudit().valid)
       throw new Error("台账校验失败，已阻止进程启动");
-    return { adapter, config };
+    return { adapter, config, executable, args };
   }
   launch(id: AgentId, prompt?: string): void {
-    const { adapter, config } = this.validate(id, prompt);
+    const { adapter, config, executable, args } = this.validate(id, prompt);
     // No shell, shell command, arbitrary flag, bypass permission mode, or global kill.
-    const args = adapter.mode === "cli" ? ["-p"] : [];
+    const env = { ...process.env };
+    // Preserve provider/login environment while preventing injected Node startup hooks.
+    if (config.claudeNpm) for (const name of Object.keys(env)) {
+      if (["NODE_OPTIONS", "NODE_PATH", "ELECTRON_RUN_AS_NODE"].includes(name.toUpperCase())) delete env[name];
+    }
     this.service.audit(
       "process.request",
-      `${id} · ${config.executable} · cwd=${config.workspace}`,
+      `${id} · ${executable}${config.claudeNpm?.kind === "node" ? " · " + config.claudeNpm.entry : ""} · cwd=${config.workspace}`,
     );
-    const child = spawn(config.executable!, args, {
+    const child = spawn(executable, args, {
       cwd: config.workspace,
       windowsHide: true,
       shell: false,
+      env,
       stdio: adapter.mode === "cli" ? "pipe" : "ignore",
     });
     const state: AgentView["process"] = {

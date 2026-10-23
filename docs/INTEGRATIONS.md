@@ -6,7 +6,7 @@
 
 | Agent | 记忆候选 | 技能候选 | 进程能力与依据 |
 | --- | --- | --- | --- |
-| Claude Code CLI | `~\.claude\CLAUDE.md` | `~\.claude\skills` | 官方文档适配；用户绑定原生 `claude.exe` 后执行固定 `-p` 单次任务 |
+| Claude Code CLI | `~\.claude\CLAUDE.md` | `~\.claude\skills` | 官方文档适配；原生或 npm 安装版，授权后执行固定 `-p` 单次任务 |
 | WorkBuddy | `~\.workbuddy\MEMORY.md` | `~\.workbuddy\skills` | 参考界面的候选布局；通用 EXE 启动，文件兼容性待验证 |
 | TRAE | `~\.trae-cn\memory\user_profile.md`、`~\.trae\memory\user_profile.md` | `~\.trae-cn\skills`、`~\.trae\skills` | 候选布局；通用 EXE 启动，加载规则待验证 |
 | DeepSeek Harness | `~\.dsh\AGENTS.md` | `~\.dsh\skills` | 参考界面的 `.dsh` 候选；未实现 DSH CLI 协议，支持手动绑定独立桌面 EXE |
@@ -23,7 +23,15 @@
 
 EXE 发现候选为 `~\.local\bin\claude.exe` 和 `~\.claude\local\claude.exe`；它们是查找提示，需用户选择和授权。启动形式为固定参数 `-p`，任务正文通过标准输入传入，等待进程退出并展示输出。CLI 的单次任务及管道输入依据见 [Claude CLI 参考](https://code.claude.com/docs/en/cli-reference)。
 
-用户需事先完成原生 CLI 安装和登录。控制台不创建登录令牌、不读取账户余额、不添加跳过权限的选项，也不提供交互式终端。需要交互审批的任务可能无法在此模式完成，应在 CLI 自身环境中处理。支持范围并不涵盖官方 CLI 文档中的其他命令。
+用户需事先完成原生或 npm CLI 安装和登录。控制台不创建登录令牌、不读取账户余额、不添加跳过权限的选项，也不提供交互式终端。需要交互审批的任务可能无法在此模式完成，应在 CLI 自身环境中处理。支持范围并不涵盖官方 CLI 文档中的其他命令。
+
+### npm 安装
+
+支持 `npm install -g @anthropic-ai/claude-code`，安装方式见 [Claude 安装文档](https://code.claude.com/docs/en/setup)。控制台只读检查 npm prefix 环境变量、默认 `%APPDATA%\npm`、nvm 路径以及最多 128 个 PATH 目录中的 `claude.cmd`；也可手动选择该文件。发现不会自动授权或执行程序。
+
+`claude.cmd` 仅是定位文件，正文不读取、不执行。解析相邻 `node_modules/@anthropic-ai/claude-code/package.json`，核对包名、版本与已知 `bin.claude` 布局：`bin/claude.exe` 直接执行包内原生程序；`cli.js` 用检查过的本地 `node.exe` 执行。包名和 PE 格式检查不代表签名认证；未知布局拒绝启动并显示错误。当前机器的 npm 2.1.243 布局及 `--version` 已验证；旧版布局用隔离夹具测试，未运行真实计费任务。
+
+支持自定义 prefix 的空格路径及 nvm 外层 junction：授权时解析出实际入口与 Node 路径并在确认框显示，包内链接仍拒绝。每次启动重新检查；入口、运行时或 prefix 重定向变化需要重新授权，同路径版本更新在重新校验后可使用。命令参数使用数组传入，固定为 `-p`，不经过 CMD 或 PowerShell。
 
 ## 桌面程序候选
 
@@ -40,6 +48,6 @@ EXE 发现候选为 `~\.local\bin\claude.exe` 和 `~\.claude\local\claude.exe`�
 
 已实现：只读候选发现、真实文件状态和 SHA-256、文本技能检查、明确路径授权、共享源单向同步预览、写前备份、恢复预览、活动台账、受限 EXE 启停，以及 Claude 单次任务输出。
 
-未实现：厂商登录与额度 API、历史会话检索、跨厂商会话迁移、其他五家任务派发、已运行进程接管、自动同步、双向合并、自动删除、链接写入、脚本技能执行、完整技能包迁移、任意 shell 命令和 npm `.cmd` 启动器。
+未实现：厂商登录与额度 API、历史会话检索、跨厂商会话迁移、其他五家任务派发、已运行进程接管、自动同步、双向合并、自动删除、链接写入、脚本技能执行、完整技能包迁移、任意 shell 命令或任意 npm 包启动。
 
 官方依据核对日期：2026-10-23。厂商能力和路径可能变化，发布前仍需使用实际安装版本逐项验证；候选布局没有升级为官方文档依据。

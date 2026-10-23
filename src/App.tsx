@@ -978,7 +978,7 @@ export default function App() {
                         </Badge>
                         <span>
                           {a.mode === "cli"
-                            ? "原生 CLI 单次任务"
+                            ? "原生 / npm 单次任务"
                             : "用户绑定 EXE 启动"}
                         </span>
                         <p>{a.note}</p>
@@ -1012,7 +1012,7 @@ export default function App() {
                       <li>厂商登录、额度、历史会话或后台任务 API</li>
                       <li>接管已在运行的第三方进程与跨厂商会话迁移</li>
                       <li>双向合并、自动同步、自动清理或 junction 写入</li>
-                      <li>技能脚本 / 二进制同步、npm .cmd 启动器</li>
+                      <li>技能脚本 / 二进制同步、任意 CMD 或 PowerShell 执行</li>
                     </ul>
                   </section>
                 </div>
@@ -1024,7 +1024,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.1.0</b>
+                AGENT MEMORY CONSOLE <b>v0.1.1</b>
               </span>
             </footer>
           </>
@@ -1064,6 +1064,29 @@ export default function App() {
               </button>
             </div>
             <p className="adapter-note">{current.note}</p>
+            {current.id === "claude" && (
+              <div className="config-block npm-installation">
+                <div>
+                  <h3>npm 安装</h3>
+                  <Badge tone={current.npmInstallation ? "green" : "muted"}>
+                    {current.npmInstallation ? "已授权 npm" : current.npmCandidate ? "已发现 · 待授权" : "未发现"}
+                  </Badge>
+                </div>
+                {current.npmInstallation && <>
+                  <p className="secondary">已授权版本 {current.npmInstallation.packageVersion} · {current.npmInstallation.kind === "native" ? "包内原生程序" : "Node.js CLI"}</p>
+                  <Path value={current.npmInstallation.entry} />
+                  {current.npmInstallation.node && <Path value={current.npmInstallation.node} />}
+                </>}
+                {current.npmCandidate ? <>
+                  <p className="secondary">检测到版本 {current.npmCandidate.packageVersion} · {current.npmCandidate.kind === "native" ? "包内原生程序" : "Node.js CLI"}</p>
+                  <Path value={current.npmCandidate.launcher} />
+                  <button className="small" disabled={busy || current.process.running} onClick={() => void run(() => api!.approveNpm())}>
+                    <ShieldCheck size={13} />授权检测到的 npm 安装
+                  </button>
+                </> : <p className="secondary">可在下方程序选择器中手动选择 npm 安装目录中的 claude.cmd。</p>}
+                <p className="footnote">自动发现不会授予启动权限。授权时会显示实际 CLI 与 Node.js 路径。</p>
+              </div>
+            )}
             <div className="config-blocks">
               {(
                 [
@@ -1083,7 +1106,7 @@ export default function App() {
                   },
                   {
                     key: "executable",
-                    name: "原生可执行文件",
+                    name: current.id === "claude" ? "Claude 程序（EXE / claude.cmd）" : "原生可执行文件",
                     value: current.executable,
                     approved: current.executableApproved,
                     error: undefined,
@@ -1208,7 +1231,7 @@ export default function App() {
                 </button>
               </div>
               <p className="footnote">
-                需先绑定 EXE
+                需先授权程序
                 和工作目录。只追踪直接子进程；外部程序和独立子进程状态未知。
               </p>
               {current.process.exitCode !== undefined && (

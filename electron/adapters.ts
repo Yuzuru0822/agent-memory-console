@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentId } from "../src/shared";
+import { npmDiscoveryPaths, type NpmDiscoveryOptions } from "./claude-npm";
 
 /** Extend this registry to add an adapter. Paths are candidates, never a write grant. */
 export interface Adapter {
@@ -14,8 +15,9 @@ export interface Adapter {
   memory: string[];
   skills: string[];
   executables: string[];
+  npmDiscovery?: NpmDiscoveryOptions;
 }
-export function createAdapters(home: string, local: string): Adapter[] {
+export function createAdapters(home: string, local: string, environment: NodeJS.ProcessEnv = {}): Adapter[] {
   const h = (...s: string[]) => path.join(home, ...s);
   const l = (...s: string[]) => path.join(local, ...s);
   return [
@@ -54,12 +56,13 @@ export function createAdapters(home: string, local: string): Adapter[] {
     {
       id: "claude",
       name: "Claude Code CLI",
-      subtitle: "原生 CLI · 本地任务",
+      subtitle: "原生 / npm CLI · 本地任务",
       accent: "#c99b89",
       glyph: "✳",
       integration: "documented",
       mode: "cli",
-      note: "按官方文档检查 ~/.claude/CLAUDE.md 和 skills；原生 claude.exe 支持 -p 单次任务。需自行安装、登录；不处理 npm 的 .cmd 启动器。",
+      note: "支持原生与 npm 安装版的单次任务。npm 版检查 claude.cmd 旁的安装包，直接启动包内 EXE 或 Node + cli.js；不执行 CMD 脚本。需自行安装并登录。",
+      npmDiscovery: npmDiscoveryPaths(home, environment),
       memory: [h(".claude", "CLAUDE.md")],
       skills: [h(".claude", "skills")],
       executables: [

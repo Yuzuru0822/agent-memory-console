@@ -4,17 +4,19 @@
 
 ## 当前状态
 
-截至 2026-10-23 本次记录：
+截至 2026-10-23，v0.1.1 本次记录：
 
 | 检查 | 状态 | 说明 |
 | --- | --- | --- |
-| `npm test` | 已通过，34 项 | 隔离目录内的路径、文件、备份、台账和启动前校验 |
+| `npm test` | 已通过，53 项 | 原有 34 项 + 17 项 npm 解析测试 + 2 项 npm 服务/进程授权测试 |
 | `npm run build` | 已通过 | 类型检查、Electron 主进程与 preload 编译、React 界面生产构建 |
 | `node tests/process-smoke.cjs` | 已通过 | 使用无害 Node.exe 替身真实启动，验证标准输入/输出、PID、运行状态、退出码、仅停止所属子进程和活动链 |
+| `node tests/npm-process-smoke.cjs` | 已通过 | 使用合成 cli.js 与真实 Node，验证固定参数、原样 stdin、禁用继承的启动钩子、输出和退出码 |
+| 本机 npm Claude `--version` | 已通过 | 发现并直接执行包内 EXE，输出 2.1.243；未发送任务或验证登录 |
 | `npm run test:desktop` | 已通过 | 真实 Electron 45.0.0；六个适配器、隔离与沙箱、预览取消、记忆/技能同步、备份恢复、非法参数、启动授权、页面切换和窄窗口布局 |
-| `npm run pack` | 已完成 | 生成 Windows x64 `release/win-unpacked/` 解包成品 |
-| `node tests/packaged.cjs` | 已通过 | 实际启动解包成品；确认 `isPackaged=true`、`sandbox=true`，通过 `--user-data-dir` 使用独立测试配置目录 |
-| `npm run dist` | 已完成 | 生成 Windows x64 便携单文件 EXE，128,406,095 字节 |
+| `npm run pack` / dist 的解包阶段 | 已完成 | 生成 Windows x64 `release/win-unpacked/` 解包成品 |
+| `node tests/packaged.cjs` | 已通过 | 实际 v0.1.1 解包成品；确认打包、沙箱、窗口可见与隔离配置，还通过 `CONSOLE_EXPECT_NPM_VERSION=2.1.243` 检查本机发现与授权按钮 |
+| `npm run dist` | 已完成 | Windows x64 便携单文件 EXE，102,336,691 字节 |
 | `node tests/portable.cjs` | 已通过 | NSIS 单文件自动解压启动、隔离配置、六张卡片、原生接口、渲染进程无 Node、页面切换及关闭 |
 | 六家厂商真实客户端、真实账户 | 未验证 | 未测试账户登录、实际任务计费、真实会话协议或技能在厂商端加载 |
 | 代码签名与外部分发验证 | 未配置 / 未验证 | 本工程不包含签名凭据或签名发布流程 |
@@ -30,6 +32,7 @@ npm ci
 npm test
 npm run build
 node tests/process-smoke.cjs
+node tests/npm-process-smoke.cjs
 npm run test:desktop
 npm run pack
 node tests/packaged.cjs
@@ -47,9 +50,10 @@ node tests/portable.cjs
 | --- | --- |
 | `tests/safety.test.ts` | 拒绝相对路径、磁盘根、网络/设备路径与 Windows ADS；防止兄弟目录前缀误判和父目录逃逸；拒绝路径中及遍历时的 junction；拒绝 NUL、无效 UTF-8、超大文件和目录；允许文本及隐藏/生成文件过滤；技能文件数量上限；原子替换及重命名故障后的临时文件清理；PE 格式检查，拒绝改名脚本和 DLL |
 | `tests/service.test.ts` | 发现不授予权限；记忆预览、备份、写入及恢复；源或目标修改后中止；全批次预检查；撤销授权和新预览使旧计划失效；计划只能执行一次；重复目标与嵌套技能源/目标拒绝；只复制文本并保留目标独有文件；预览后将目标目录替换为 junction 时拒绝；保护应用/数据目录；损坏快照和非法清单拒绝；恢复需当前授权；台账改写、删行、重排检测；台账损坏阻止写入及授权变更；多文件部分失败保留完整写前快照并可恢复；恢复保留后续新增文件 |
-| `tests/processes.test.ts` | 必须明确授权 EXE 和工作目录；拒绝空白及超长 Claude 任务；授权后被替换的 EXE 在启动前再次检查；无法停止未归属于控制台的进程 |
+| `tests/processes.test.ts` | 必须明确授权程序和工作目录；拒绝空白及超长 Claude 任务；授权后被替换的 EXE 再次检查；无法停止未归属进程；npm 发现不授予权限、授权/撤销/与原生配置互斥、固定程序与参数以及入口变更拒绝 |
+| `tests/claude-npm.test.ts` | 新旧包结构、自定义 prefix 的空格和特殊字符、元数据/文本大小限制、错误包名及入口逃逸、缺失 Node、路径变更、同路径升级、nvm/prefix junction 解析、包内链接拒绝、有限环境候选及只读发现 |
 
-`peFixture()` 只构造格式校验所需的字节，不是可运行的 Windows 程序，单元测试从不执行它。上述 34 项单元测试不覆盖真实进程启动；真实子进程生命周期由下述独立脚本验证。
+`peFixture()` 只构造格式校验所需的字节，不是可运行的 Windows 程序，单元测试从不执行它。上述 53 项单元测试不覆盖真实进程启动；真实子进程生命周期由下述独立脚本验证。
 
 ## 真实子进程生命周期测试
 
@@ -61,6 +65,8 @@ node tests/portable.cjs
 
 ## Electron 桌面冒烟脚本
 
+v0.1.1 另外通过 `tests/npm-process-smoke.cjs`：临时目录中的合成 `cli.js` 接收固定 `-p`，包含 shell 元字符的任务原样进入 stdin，CMD 正文不执行，故意设置的 `NODE_OPTIONS`、`NODE_PATH`、`ELECTRON_RUN_AS_NODE` 不传入子进程，退出码为 0，台账完整。真正的已安装 npm 版仅执行了 `--version`；未调用模型。
+
 `tests/desktop.cjs` 使用 Playwright 的 Electron 驱动启动构建后的应用。它通过仅开发版本有效的 `CONSOLE_TEST_HOME` 和 `CONSOLE_TEST_DATA` 设置隔离的用户目录与数据目录，夹具保留在相对于工程的 `../../work/desktop-fixture-<时间戳>/`，便于失败后排查。
 
 本次执行已通过以下检查：
@@ -69,6 +75,7 @@ node tests/portable.cjs
 - 记忆同步预览展示前后文本；取消确认不写入，确认后同步、备份及台账结果符合预期。
 - 技能文本同步，以及从快照生成恢复计划并还原原始内容。
 - 非法 Agent ID 被拒绝；未经授权的 EXE 不启动，详情中的启动按钮禁用。
+- npm 合成安装被发现但未自动授权；取消确认不保存，确认框包含实际入口与版本，确认后显示已授权，撤销后不能继续使用。未选择工作目录和任务时运行按钮保持禁用。
 - 页面切换、详情面板，以及 1000 × 800 窗口下无横向溢出；没有捕获到的页面脚本异常。
 
 脚本把原生确认框替换为可控响应，以验证取消与确认两条分支。它不会实际操作系统文件选择器，因此不证明人工路径授权对话流程已经完成验证，也不会替用户启动真实 Agent。
@@ -83,7 +90,7 @@ node tests/portable.cjs
 
 ## 便携单文件测试
 
-`tests/portable.cjs` 启动 `release/Agent-Memory-Console-0.1.0-win-x64.exe`，验证 NSIS 启动器自动解压并打开实际应用。测试使用独立的 `../../work/portable-profile-<时间戳>/` 配置目录，通过只绑定 `127.0.0.1` 的临时 CDP 测试端口连接界面，完成后关闭窗口与测试进程。正常双击启动不包含这些调试参数。
+`tests/portable.cjs` 按 package.json 版本启动 `release/Agent-Memory-Console-0.1.1-win-x64.exe`，验证 NSIS 启动器自动解压并打开实际应用。测试使用独立的 `../../work/portable-profile-<时间戳>/` 配置目录，通过只绑定 `127.0.0.1` 的临时 CDP 测试端口连接界面，完成后关闭窗口与测试进程。正常双击启动不包含这些调试参数。
 
 本次已确认六张 Agent 卡片、可调用的 preload 接口、配置目录隔离、渲染页面没有 `window.require`，以及集成页面导航。此脚本不授权或写入 Agent 文件，也不启动厂商程序；候选发现仍可能只读检查当前用户 home。`portable-integrations.png` 保存于 `test-results/`，仅作为本机成品验证记录。
 

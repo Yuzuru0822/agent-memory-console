@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
   const project = path.resolve(__dirname, '..');
-  const executable = path.join(project, 'release', 'Agent-Memory-Console-0.1.0-win-x64.exe');
+  const executable = path.join(project, 'release', `Agent-Memory-Console-${require('../package.json').version}-win-x64.exe`);
   const profile = path.resolve(project, '../../work', `portable-profile-${Date.now()}`);
   fs.mkdirSync(profile, { recursive: true });
   const server = net.createServer();

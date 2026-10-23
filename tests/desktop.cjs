@@ -42,6 +42,13 @@ const path = require("node:path");
   write(path.join(home, ".claude", "CLAUDE.md"), "# Claude instructions\n");
   write(path.join(home, ".claude", "skills", "notes", "SKILL.md"), "# Notes\n");
   write(path.join(home, ".dsh", "AGENTS.md"), "# Harness instructions\n");
+  const npmPrefix = path.join(home, "AppData", "Roaming", "npm");
+  const npmEntry = path.join(npmPrefix, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+  write(path.join(npmPrefix, "claude.cmd"), "@echo fixture - must never be executed");
+  write(path.join(npmPrefix, "node_modules", "@anthropic-ai", "claude-code", "package.json"), JSON.stringify({name:"@anthropic-ai/claude-code",version:"2.1.243",bin:{claude:"bin/claude.exe"}}));
+  const pe = Buffer.alloc(128);
+  pe.write("MZ"); pe.writeUInt32LE(64,60); pe.write("PE\0\0",64); pe.writeUInt16LE(0x8664,68); pe.writeUInt16LE(0x0002,86); pe.writeUInt16LE(0x20b,88);
+  write(npmEntry, pe); // Format fixture only; never launched.
   write(
     path.join(data, "console-data", "config.json"),
     JSON.stringify(
@@ -183,6 +190,31 @@ const path = require("node:path");
     );
     await page.screenshot({ path: path.join(results, "agent-details.png") });
     await page.getByRole("button", { name: "关闭详情", exact: true }).click();
+    await page.locator(".agent-card").filter({hasText:"Claude Code CLI"}).getByRole("button", {name:/查看检查与配置/}).click();
+    await page.getByRole("dialog", {name:"Claude Code CLI 详情"}).waitFor();
+    const npmApproval = page.getByRole("button", {name:"授权检测到的 npm 安装",exact:true});
+    await npmApproval.waitFor();
+    assert.match(await page.locator(".npm-installation").innerText(), /2\.1\.243/);
+    const npmBefore = await page.evaluate(()=>window.consoleApi.snapshot());
+    assert.equal(npmBefore.agents.find(a=>a.id==='claude').executableApproved,false);
+    await app.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:0,checkboxChecked:false});});
+    await npmApproval.click();
+    await page.waitForFunction(()=>document.querySelector('[role=status]')?.textContent.includes('未授权 npm'));
+    assert.equal((await page.evaluate(()=>window.consoleApi.snapshot())).agents.find(a=>a.id==='claude').executableApproved,false);
+    await app.evaluate(({dialog})=>{dialog.showMessageBox=async(_window,options)=>{
+      if(!options.detail.includes('bin') || !options.detail.includes('2.1.243')) throw new Error('npm confirmation must show the actual entry and version');
+      return {response:1,checkboxChecked:false};
+    };});
+    await npmApproval.click();
+    await page.waitForFunction(()=>document.querySelector('.npm-installation')?.textContent.includes('已授权 npm'));
+    const npmAfter = (await page.evaluate(()=>window.consoleApi.snapshot())).agents.find(a=>a.id==='claude');
+    assert.equal(npmAfter.npmInstallation.entry,npmEntry);
+    assert.equal(npmAfter.executableApproved,true);
+    assert.equal(await page.getByRole('button',{name:'运行任务',exact:true}).isDisabled(),true,'workspace and task are still required');
+    await page.screenshot({path:path.join(results,'npm-installation.png')});
+    await page.evaluate(()=>window.consoleApi.clear('claude','executable'));
+    assert.equal((await page.evaluate(()=>window.consoleApi.snapshot())).agents.find(a=>a.id==='claude').npmInstallation,undefined);
+    await page.getByRole("button", { name: "关闭详情", exact: true }).click();
     for (const label of [
       "记忆与技能",
       "备份快照",
@@ -217,7 +249,7 @@ const path = require("node:path");
     });
     assert.deepEqual(errors, []);
     console.log(
-      "PASS desktop: real Electron, six adapters, isolated preload, preview, cancel, memory/skills sync, backups, restore, invalid IPC, launch authorization, navigation, responsive layout.",
+      "PASS desktop: real Electron, six adapters, isolated preload, preview, cancel, memory/skills sync, backups, restore, invalid IPC, launch authorization, npm discovery/cancel/approval/revocation, navigation, responsive layout.",
     );
     console.log("Screenshots: " + results);
   } finally {
