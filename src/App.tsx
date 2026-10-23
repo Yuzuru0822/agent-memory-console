@@ -1,0 +1,1366 @@
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  Activity,
+  ArrowDownToLine,
+  ArrowRight,
+  ArrowUpRight,
+  Boxes,
+  Check,
+  CheckCheck,
+  ChevronRight,
+  CircleHelp,
+  Clock3,
+  Database,
+  FileText,
+  Fingerprint,
+  Folder,
+  FolderOpen,
+  GitCompareArrows,
+  History,
+  Layers3,
+  LayoutDashboard,
+  Link2,
+  LoaderCircle,
+  LockKeyhole,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Terminal,
+  Unplug,
+  X,
+} from "lucide-react";
+import type { AgentId, AgentView, PathKind, Plan, Snapshot } from "./shared";
+
+const api = window.consoleApi;
+type Tab = "overview" | "sync" | "backups" | "activity" | "integrations";
+const nav = [
+  { id: "overview", name: "监控总览", icon: LayoutDashboard },
+  { id: "sync", name: "记忆与技能", icon: Layers3 },
+  { id: "backups", name: "备份快照", icon: History },
+  { id: "activity", name: "活动台账", icon: Activity },
+  { id: "integrations", name: "集成能力", icon: Boxes },
+] as const;
+const stateNames = {
+  ready: "路径完整",
+  partial: "部分发现",
+  missing: "未配置",
+  attention: "需检查",
+};
+const time = (value?: string) =>
+  value ? new Date(value).toLocaleTimeString("zh-CN", { hour12: false }) : "—";
+const date = (value: string) =>
+  new Date(value).toLocaleString("zh-CN", { hour12: false });
+const short = (value?: string) => (value ? value.slice(0, 12) : "未设置");
+function Badge({
+  children,
+  tone = "muted",
+}: {
+  children: ReactNode;
+  tone?: string;
+}) {
+  return (
+    <span className={`badge ${tone}`}>
+      <i />
+      {children}
+    </span>
+  );
+}
+function Empty({ children }: { children: ReactNode }) {
+  return (
+    <div className="empty">
+      <FolderOpen size={24} />
+      <span>{children}</span>
+    </div>
+  );
+}
+function Path({ value }: { value?: string }) {
+  return (
+    <code className="path" title={value}>
+      {value || "尚未选择本地路径"}
+    </code>
+  );
+}
+
+export default function App() {
+  const [data, setData] = useState<Snapshot>();
+  const [tab, setTab] = useState<Tab>("overview");
+  const [selected, setSelected] = useState<AgentId[]>([]);
+  const [detail, setDetail] = useState<AgentId>();
+  const [plan, setPlan] = useState<Plan>();
+  const [planIndex, setPlanIndex] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; error: boolean }>();
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [prompt, setPrompt] = useState("");
+  const [auto, setAuto] = useState(true);
+  const refreshing = useRef(false);
+  async function refresh() {
+    if (!api || refreshing.current) return;
+    refreshing.current = true;
+    try {
+      setData(await api.snapshot());
+    } catch (e) {
+      setNotice({ text: String(e), error: true });
+    } finally {
+      refreshing.current = false;
+    }
+  }
+  useEffect(() => {
+    void refresh();
+  }, []);
+  const running = data?.agents.some((a) => a.process.running);
+  useEffect(() => {
+    if (!auto) return;
+    const timer = setInterval(() => void refresh(), running ? 2000 : 30000);
+    return () => clearInterval(timer);
+  }, [auto, running]);
+  useEffect(() => {
+    if (!notice || notice.error) return;
+    const timer = setTimeout(() => setNotice(undefined), 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDetail(undefined);
+        setPlan(undefined);
+      }
+    };
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+  async function run(action: () => Promise<unknown>) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await action();
+      if (result && typeof result === "object" && "message" in result)
+        setNotice({ text: String(result.message), error: false });
+      await refresh();
+    } catch (e) {
+      setNotice({
+        text: String(e).replace(
+          /^Error: Error invoking remote method '[^']+': Error: /,
+          "",
+        ),
+        error: true,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+  function preview(mode: "memory" | "skills") {
+    void run(async () => {
+      const p = await api!.preview(mode, selected);
+      setPlan(p);
+      setPlanIndex(0);
+    });
+  }
+  const current = data?.agents.find((a) => a.id === detail);
+  const ready = data?.agents.filter((a) => a.state === "ready").length || 0;
+  const attention =
+    data?.agents.filter((a) => a.state === "attention").length || 0;
+  const consistent = data?.agents.filter((a) => a.sync === "same").length || 0;
+  const filtered =
+    data?.agents.filter(
+      (a) =>
+        (statusFilter === "all" || a.state === statusFilter) &&
+        (a.name + " " + a.subtitle).toLowerCase().includes(query.toLowerCase()),
+    ) || [];
+  const allIds = data?.agents.map((a) => a.id) || [];
+
+  function Sources() {
+    return (
+      <section className="source-grid" id="sources">
+        <div className="panel source-panel">
+          <div className="section-title">
+            <span>
+              <Database size={17} />
+              共享记忆源
+            </span>
+            <span className="eyebrow">CANONICAL MEMORY</span>
+          </div>
+          <p className="secondary">
+            将一份 Markdown 作为同步来源，明确选择目标后预览差异。
+          </p>
+          <Path value={data?.canonicalMemory.path} />
+          <div className="source-stats">
+            <span>
+              内容指纹 <strong>{short(data?.canonicalMemory.hash)}</strong>
+            </span>
+            <Badge tone={data?.canonicalMemory.hash ? "green" : "muted"}>
+              {data?.canonicalMemory.hash ? "源文件可读" : "待选择"}
+            </Badge>
+          </div>
+          {data?.canonicalMemory.error && (
+            <p className="error-text">{data.canonicalMemory.error}</p>
+          )}
+          <div className="inline-actions">
+            <button
+              disabled={busy}
+              onClick={() => void run(() => api!.pick(null, "canonicalMemory"))}
+            >
+              <Folder size={14} />
+              选择记忆文件
+            </button>
+            <button
+              className="ghost"
+              disabled={!data?.canonicalMemory.exists || busy}
+              onClick={() => void run(() => api!.reveal(null, "memory"))}
+            >
+              定位文件
+              <ArrowUpRight size={13} />
+            </button>
+          </div>
+        </div>
+        <div className="panel source-panel">
+          <div className="section-title">
+            <span>
+              <Layers3 size={17} />
+              共享技能库
+            </span>
+            <span className="eyebrow">SKILL LIBRARY</span>
+          </div>
+          <p className="secondary">
+            只同步文本文件；跳过脚本、二进制和隐藏目录，不执行技能。
+          </p>
+          <Path value={data?.canonicalSkills.path} />
+          <div className="source-stats">
+            <span>
+              SKILL.md <strong>{data?.canonicalSkills.count || 0}</strong>{" "}
+              <span className="dot-separator">·</span> 文本文件{" "}
+              <strong>{data?.canonicalSkills.files || 0}</strong>
+            </span>
+            <Badge
+              tone={
+                data?.canonicalSkills.exists && !data.canonicalSkills.error
+                  ? "green"
+                  : "muted"
+              }
+            >
+              {data?.canonicalSkills.exists && !data.canonicalSkills.error
+                ? "目录可读"
+                : "待检查"}
+            </Badge>
+          </div>
+          {data?.canonicalSkills.error && (
+            <p className="error-text">{data.canonicalSkills.error}</p>
+          )}
+          <div className="inline-actions">
+            <button
+              disabled={busy}
+              onClick={() => void run(() => api!.pick(null, "canonicalSkills"))}
+            >
+              <Folder size={14} />
+              选择技能源
+            </button>
+            <button
+              className="ghost"
+              disabled={!data?.canonicalSkills.exists || busy}
+              onClick={() => void run(() => api!.reveal(null, "skills"))}
+            >
+              定位目录
+              <ArrowUpRight size={13} />
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+  function Backups({ compact = false }: { compact?: boolean }) {
+    const rows = compact ? data?.backups.slice(0, 4) : data?.backups;
+    return (
+      <section className="panel" id="backups">
+        <div className="section-title">
+          <span>
+            <History size={17} />
+            记忆与技能备份 <small>{data?.backups.length || 0} 份快照</small>
+          </span>
+          <button
+            className="ghost small"
+            disabled={busy}
+            onClick={() => void run(() => api!.reveal(null, "storage"))}
+          >
+            打开存储目录
+            <ArrowUpRight size={13} />
+          </button>
+        </div>
+        <p className="secondary">
+          每次替换前自动备份。恢复也会先预览，并备份当前版本；新增文件不会被删除。
+        </p>
+        {rows?.length ? (
+          <div className="backup-list">
+            {rows.map((b) => (
+              <div className="backup-row" key={b.id}>
+                <div className="backup-icon">
+                  <Database size={16} />
+                </div>
+                <div>
+                  <strong>
+                    {data?.agents.find((a) => a.id === b.agent)?.name}
+                  </strong>
+                  <p>
+                    {b.label} · {b.files} 个文件
+                  </p>
+                </div>
+                <time>{date(b.at)}</time>
+                <button
+                  className="small"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      setPlan(await api!.restore(b.id));
+                      setPlanIndex(0);
+                    })
+                  }
+                >
+                  <History size={13} />
+                  预览恢复
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty>
+            还没有快照。进入 Agent 详情授权路径后，即可创建第一份备份。
+          </Empty>
+        )}
+        {compact && (data?.backups.length || 0) > 4 && (
+          <button className="ghost" onClick={() => setTab("backups")}>
+            查看全部快照
+            <ArrowRight size={14} />
+          </button>
+        )}
+      </section>
+    );
+  }
+  function Logs({ compact = false }: { compact?: boolean }) {
+    const rows = compact ? data?.logs.slice(0, 7) : data?.logs;
+    return (
+      <section className="panel" id="activity">
+        <div className="section-title">
+          <span>
+            <Activity size={17} />
+            活动时间轴
+          </span>
+          <Badge tone={data?.auditValid ? "green" : "red"}>
+            {data?.auditValid ? "哈希链完整" : "校验异常"}
+          </Badge>
+        </div>
+        <p className="secondary">
+          仅记录本机控制台的操作，不采集第三方会话内容。
+        </p>
+        {rows?.length ? (
+          <div className="timeline">
+            {rows.map((row) => (
+              <div className="event" key={row.seq}>
+                <time title={date(row.at)}>{time(row.at)}</time>
+                <i />
+                <div>
+                  <strong>{row.action}</strong>
+                  <p title={row.detail}>{row.detail}</p>
+                </div>
+                <span className="event-seq">#{row.seq}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty>等待第一条活动。自动检查不会修改 Agent 文件。</Empty>
+        )}
+        {data?.auditError && <p className="error-text">{data.auditError}</p>}
+        {compact && (
+          <button className="ghost small" onClick={() => setTab("activity")}>
+            查看完整台账
+            <ArrowRight size={13} />
+          </button>
+        )}
+      </section>
+    );
+  }
+
+  if (!api)
+    return (
+      <div className="unavailable">
+        <ShieldCheck size={40} />
+        <h1>请在 Windows 桌面应用中打开</h1>
+        <p>浏览器页面没有本地文件或进程权限。请按运行说明启动 Electron。</p>
+        <code>npm run dev</code>
+      </div>
+    );
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand-mark">
+          <Layers3 size={23} />
+        </div>
+        <div className="nav-items">
+          {nav.map((n) => (
+            <button
+              key={n.id}
+              aria-label={n.name}
+              title={n.name}
+              className={tab === n.id ? "active" : ""}
+              onClick={() => setTab(n.id)}
+            >
+              <n.icon size={21} />
+              <span>{n.name.slice(0, 2)}</span>
+            </button>
+          ))}
+        </div>
+        <div className="sidebar-bottom">
+          <ShieldCheck size={20} />
+          <span>LOCAL</span>
+          <span className="online-dot" />
+        </div>
+      </aside>
+      <main>
+        <div className="topline">
+          <span>
+            <span className="topline-brand">AGENT BRAIN</span>
+            <span className="slash">/</span>本地工作空间
+          </span>
+          <span className="local-label">
+            <LockKeyhole size={12} />
+            本地执行 · 无云端上传
+          </span>
+        </div>
+        <header>
+          <div className="hero-icon">
+            <Sparkles size={30} />
+            <i />
+          </div>
+          <div className="heading">
+            <div className="eyebrow">PERSONAL AGENT CONTROL CENTER</div>
+            <h1>
+              记忆与技能同步守护<span> / </span>
+              <small>{nav.find((n) => n.id === tab)?.name}</small>
+            </h1>
+            <p>一个控制台，照看你的每一位 AI 搭档。</p>
+          </div>
+          <div className="header-actions">
+            <label className="auto-refresh">
+              <input
+                type="checkbox"
+                checked={auto}
+                onChange={(e) => setAuto(e.target.checked)}
+              />
+              30 秒自动检查
+            </label>
+            <button
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await refresh();
+                  return { message: "本地检查已完成" };
+                })
+              }
+            >
+              <RefreshCw size={14} className={busy ? "spin" : ""} />
+              刷新
+            </button>
+          </div>
+        </header>
+        {!data ? (
+          <div className="loading">
+            <LoaderCircle className="spin" />
+            正在检查本地 Agent 路径…
+          </div>
+        ) : (
+          <>
+            {tab === "overview" && (
+              <>
+                <section
+                  className={`health-banner ${attention || !data.auditValid ? "warning" : ""}`}
+                >
+                  <div className="health-symbol">
+                    <ShieldCheck size={26} />
+                  </div>
+                  <div className="health-text">
+                    <h2>
+                      {attention || !data.auditValid
+                        ? "有路径需要检查"
+                        : ready
+                          ? "本地守护已就绪"
+                          : "等待接入你的 Agent"}
+                      <Badge tone={attention ? "amber" : "green"}>
+                        只读巡检
+                      </Badge>
+                    </h2>
+                    <p>
+                      发现{" "}
+                      {data.agents.filter((a) => a.state !== "missing").length}{" "}
+                      个 Agent 的本地文件或程序 · {consistent}{" "}
+                      份记忆与共享源一致 · 未授权路径不会被同步
+                    </p>
+                  </div>
+                  <div className="health-metrics">
+                    <div>
+                      <span>运行进程</span>
+                      <strong>
+                        {data.agents.filter((a) => a.process.running).length}
+                        <small> 个</small>
+                      </strong>
+                    </div>
+                    <div>
+                      <span>共享版本</span>
+                      <strong className="mono">
+                        {data.canonicalMemory.hash?.slice(0, 8) || "—"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>上次检查</span>
+                      <strong>{time(data.at)}</strong>
+                    </div>
+                  </div>
+                </section>
+                <div className="cards-toolbar">
+                  <div className="filter-group">
+                    {[
+                      { id: "all", label: "全部", count: 6 },
+                      { id: "ready", label: "路径完整", count: ready },
+                      {
+                        id: "partial",
+                        label: "部分发现",
+                        count: data.agents.filter((a) => a.state === "partial")
+                          .length,
+                      },
+                      { id: "attention", label: "需检查", count: attention },
+                      {
+                        id: "missing",
+                        label: "未配置",
+                        count: data.agents.filter((a) => a.state === "missing")
+                          .length,
+                      },
+                    ].map((f) => (
+                      <button
+                        className={`filter ${statusFilter === f.id ? "selected" : ""}`}
+                        key={f.id}
+                        onClick={() => setStatusFilter(f.id)}
+                      >
+                        <i className={f.id} />
+                        {f.label}
+                        <b>{f.count}</b>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="search">
+                    <Search size={14} />
+                    <input
+                      aria-label="搜索 Agent"
+                      placeholder="搜索 Agent…"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="agent-grid">
+                  {filtered.map((a) => (
+                    <article
+                      className={`agent-card ${a.state === "missing" ? "is-missing" : ""}`}
+                      key={a.id}
+                      style={{ "--accent": a.accent } as CSSProperties}
+                    >
+                      <div className="card-top">
+                        <span>
+                          MEMORY UNIT <span>· {a.id.toUpperCase()}</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${a.name}`}
+                          checked={selected.includes(a.id)}
+                          onChange={(e) =>
+                            setSelected((ids) =>
+                              e.target.checked
+                                ? [...ids, a.id]
+                                : ids.filter((id) => id !== a.id),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="agent-identity">
+                        <div className="avatar">
+                          {a.glyph}
+                          <i />
+                        </div>
+                        <div>
+                          <h3>{a.name}</h3>
+                          <p>{a.subtitle}</p>
+                          <span
+                            className={`support-label ${a.integration === "documented" ? "documented" : ""}`}
+                          >
+                            {a.integration === "documented"
+                              ? "文档适配 · CLI"
+                              : "通用适配 · 待验证"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="memory-status">
+                        <div>
+                          <Badge
+                            tone={
+                              a.state === "ready"
+                                ? "green"
+                                : a.state === "attention"
+                                  ? "amber"
+                                  : "muted"
+                            }
+                          >
+                            {stateNames[a.state]}
+                          </Badge>
+                          {a.process.running && (
+                            <Badge tone="green">运行中</Badge>
+                          )}
+                        </div>
+                        <div className="fingerprint">
+                          <Fingerprint size={17} />
+                          <strong>
+                            {a.memory.hash?.slice(0, 10) || "尚未读取记忆"}
+                          </strong>
+                          <span>
+                            {a.sync === "same" ? (
+                              <CheckCheck size={15} />
+                            ) : a.sync === "different" ? (
+                              <GitCompareArrows size={15} />
+                            ) : null}
+                          </span>
+                        </div>
+                        <div className="memory-caption">
+                          <span>
+                            {a.sync === "same"
+                              ? "与共享记忆一致"
+                              : a.sync === "different"
+                                ? "与共享记忆有差异"
+                                : "配置共享源后可比较"}
+                          </span>
+                          <span>
+                            {a.memoryApproved ? "已授权" : "只读发现"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="card-path">
+                        <span>记忆路径</span>
+                        <Path value={a.memory.path} />
+                      </div>
+                      <div className="agent-stats">
+                        <div>
+                          <span>总字符</span>
+                          <strong>
+                            {a.memory.chars?.toLocaleString() ?? "—"}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>技能</span>
+                          <strong>
+                            {a.skills.exists && !a.skills.error
+                              ? a.skills.count
+                              : "—"}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>最后写入</span>
+                          <strong className="time-value">
+                            {time(a.memory.modified)}
+                          </strong>
+                        </div>
+                      </div>
+                      <button
+                        className="card-detail"
+                        onClick={() => {
+                          setDetail(a.id);
+                          setPrompt("");
+                        }}
+                      >
+                        <span>
+                          <ChevronRight size={14} />
+                          查看检查与配置
+                        </span>
+                        <span>
+                          {a.memoryApproved || a.skillsApproved
+                            ? "已授权路径"
+                            : "待授权"}
+                          <Settings2 size={13} />
+                        </span>
+                      </button>
+                    </article>
+                  ))}
+                </div>
+                {!filtered.length && <Empty>没有符合条件的 Agent。</Empty>}
+                <div className="sync-bar">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={selected.length === allIds.length}
+                      onChange={(e) =>
+                        setSelected(e.target.checked ? allIds : [])
+                      }
+                    />
+                    已选 {selected.length} 个
+                  </label>
+                  <button
+                    className="primary"
+                    disabled={
+                      !selected.length || busy || !data.canonicalMemory.hash
+                    }
+                    onClick={() => preview("memory")}
+                  >
+                    <GitCompareArrows size={15} />
+                    预览记忆同步
+                  </button>
+                  <button
+                    disabled={
+                      !selected.length ||
+                      busy ||
+                      !data.canonicalSkills.exists ||
+                      !!data.canonicalSkills.error
+                    }
+                    onClick={() => preview("skills")}
+                  >
+                    <Layers3 size={15} />
+                    预览技能同步
+                  </button>
+                  <span>
+                    <ShieldCheck size={13} />
+                    先预览 · 再确认 · 自动备份
+                  </span>
+                </div>
+                <div className="notice-strip">
+                  <span className="online-dot" />
+                  文件状态来自实际检查；额度、登录状态与厂商会话尚未接入。
+                  <button onClick={() => setTab("integrations")}>
+                    查看支持范围
+                    <ArrowRight size={13} />
+                  </button>
+                </div>
+                <Sources />
+                <div className="lower-grid">
+                  <section className="panel fingerprint-panel">
+                    <div className="section-title">
+                      <span>
+                        <Fingerprint size={17} />
+                        内容寻址指纹
+                      </span>
+                      <span className="eyebrow">SHA-256</span>
+                    </div>
+                    <div className="fingerprint-orbit">
+                      <Fingerprint size={45} />
+                    </div>
+                    <div className="key-value">
+                      <span>当前共享记忆</span>
+                      <code>{short(data.canonicalMemory.hash)}</code>
+                    </div>
+                    <div className="key-value">
+                      <span>已一致 Agent</span>
+                      <strong className="green-text">{consistent} / 6</strong>
+                    </div>
+                    <div className="key-value">
+                      <span>活动记录</span>
+                      <strong>{data.logs[0]?.seq || 0} 条</strong>
+                    </div>
+                    <div className="key-value">
+                      <span>备份策略</span>
+                      <strong>写入前快照 · 无自动清理</strong>
+                    </div>
+                    <p className="footnote">
+                      哈希用于检查一致性。未采集 token
+                      使用量，也不推断模型上下文额度。
+                    </p>
+                  </section>
+                  <Logs compact />
+                </div>
+                <Backups compact />
+              </>
+            )}
+            {tab === "sync" && (
+              <>
+                <div className="page-heading">
+                  <h2>让共同的知识保持一致</h2>
+                  <p>
+                    共享源由你指定。只向已授权的目标同步，不合并或删除内容。
+                  </p>
+                </div>
+                <Sources />
+                <section className="panel">
+                  <div className="section-title">
+                    <span>
+                      <GitCompareArrows size={17} />
+                      同步目标
+                    </span>
+                    <span className="secondary">
+                      选择 Agent 后生成逐文件差异
+                    </span>
+                  </div>
+                  <div className="target-list">
+                    {data.agents.map((a) => (
+                      <label key={a.id}>
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(a.id)}
+                          onChange={(e) =>
+                            setSelected((ids) =>
+                              e.target.checked
+                                ? [...ids, a.id]
+                                : ids.filter((id) => id !== a.id),
+                            )
+                          }
+                        />
+                        <span
+                          className="mini-avatar"
+                          style={{ color: a.accent }}
+                        >
+                          {a.glyph}
+                        </span>
+                        <strong>{a.name}</strong>
+                        <Badge tone={a.memoryApproved ? "green" : "muted"}>
+                          记忆{a.memoryApproved ? "已授权" : "未授权"}
+                        </Badge>
+                        <Badge tone={a.skillsApproved ? "green" : "muted"}>
+                          技能{a.skillsApproved ? "已授权" : "未授权"}
+                        </Badge>
+                        <button
+                          className="ghost small"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setDetail(a.id);
+                          }}
+                        >
+                          配置
+                          <ChevronRight size={13} />
+                        </button>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="inline-actions">
+                    <button
+                      className="primary"
+                      disabled={
+                        !selected.length || !data.canonicalMemory.hash || busy
+                      }
+                      onClick={() => preview("memory")}
+                    >
+                      <GitCompareArrows size={15} />
+                      预览记忆同步
+                    </button>
+                    <button
+                      disabled={
+                        !selected.length ||
+                        !data.canonicalSkills.exists ||
+                        !!data.canonicalSkills.error ||
+                        busy
+                      }
+                      onClick={() => preview("skills")}
+                    >
+                      <Layers3 size={15} />
+                      预览技能同步
+                    </button>
+                  </div>
+                </section>
+                <section className="panel">
+                  <div className="section-title">
+                    <span>
+                      <Link2 size={17} />
+                      技能目录检查
+                    </span>
+                    <Badge>安全文本复制</Badge>
+                  </div>
+                  {data.agents.map((a) => (
+                    <div className="skill-row" key={a.id}>
+                      <div>
+                        <strong>{a.name}</strong>
+                        <Badge
+                          tone={
+                            a.skills.error
+                              ? "amber"
+                              : a.skills.exists
+                                ? "green"
+                                : "muted"
+                          }
+                        >
+                          {a.skills.linked
+                            ? "链接：不遍历"
+                            : a.skills.error
+                              ? "检查失败"
+                              : a.skills.exists
+                                ? "可读取"
+                                : "未发现"}
+                        </Badge>
+                      </div>
+                      <Path value={a.skills.path} />
+                      <p>
+                        {a.skills.error ||
+                          `${a.skills.count} 个 SKILL.md · ${a.skills.files} 个可同步文本文件`}
+                      </p>
+                    </div>
+                  ))}
+                </section>
+              </>
+            )}
+            {tab === "backups" && (
+              <>
+                <div className="page-heading">
+                  <h2>每一次变更，都有来处</h2>
+                  <p>只保存在此电脑。先授权 Agent 路径，即可手动创建快照。</p>
+                </div>
+                <div className="backup-actions">
+                  {data.agents.map((a) => (
+                    <button
+                      disabled={
+                        busy || (!a.memoryApproved && !a.skillsApproved)
+                      }
+                      key={a.id}
+                      onClick={() => void run(() => api!.backup(a.id))}
+                    >
+                      <ArrowDownToLine size={15} />
+                      {a.name}
+                    </button>
+                  ))}
+                </div>
+                <Backups />
+              </>
+            )}
+            {tab === "activity" && (
+              <>
+                <div className="page-heading">
+                  <h2>本地操作，清晰可查</h2>
+                  <p>
+                    展示最近 100 条；完整记录保存在本地 JSONL
+                    台账。哈希链可检测意外改动，不等同于防篡改审计。
+                  </p>
+                </div>
+                <Logs />
+              </>
+            )}
+            {tab === "integrations" && (
+              <>
+                <div className="page-heading">
+                  <h2>清晰的能力边界</h2>
+                  <p>
+                    发现文件不代表厂商协议兼容；实际读写能力与厂商集成状态分别呈现。
+                  </p>
+                </div>
+                <section className="panel">
+                  <div className="section-title">
+                    <span>
+                      <Boxes size={17} />
+                      Adapter 注册表
+                    </span>
+                    <Badge>6 个内置适配器</Badge>
+                  </div>
+                  <div className="integration-table">
+                    <div className="integration-head">
+                      <span>Agent</span>
+                      <span>适配依据</span>
+                      <span>进程能力</span>
+                      <span>说明</span>
+                    </div>
+                    {data.agents.map((a) => (
+                      <div className="integration-row" key={a.id}>
+                        <strong>{a.name}</strong>
+                        <Badge
+                          tone={
+                            a.integration === "documented" ? "green" : "amber"
+                          }
+                        >
+                          {a.integration === "documented"
+                            ? "官方文档"
+                            : "候选 / 未验证"}
+                        </Badge>
+                        <span>
+                          {a.mode === "cli"
+                            ? "原生 CLI 单次任务"
+                            : "用户绑定 EXE 启动"}
+                        </span>
+                        <p>{a.note}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <div className="source-grid">
+                  <section className="panel">
+                    <div className="section-title">
+                      <span>
+                        <ShieldCheck size={17} />
+                        已实现
+                      </span>
+                    </div>
+                    <ul className="capabilities">
+                      <li>候选路径只读发现、文件 SHA-256 与技能目录检查</li>
+                      <li>显式授权路径、同步差异、冲突检查与原子文件替换</li>
+                      <li>手动快照、写入前备份、恢复预览与活动哈希链</li>
+                      <li>受限 IPC、本地 EXE 启动、所属进程停止与 CLI 输出</li>
+                    </ul>
+                  </section>
+                  <section className="panel">
+                    <div className="section-title">
+                      <span>
+                        <Unplug size={17} />
+                        尚未实现
+                      </span>
+                    </div>
+                    <ul className="capabilities muted-list">
+                      <li>厂商登录、额度、历史会话或后台任务 API</li>
+                      <li>接管已在运行的第三方进程与跨厂商会话迁移</li>
+                      <li>双向合并、自动同步、自动清理或 junction 写入</li>
+                      <li>技能脚本 / 二进制同步、npm .cmd 启动器</li>
+                    </ul>
+                  </section>
+                </div>
+              </>
+            )}
+            <footer>
+              <span>
+                <LockKeyhole size={12} />
+                LOCAL FIRST<span>·</span>所有路径与备份保留在本机
+              </span>
+              <span>
+                AGENT MEMORY CONSOLE <b>v0.1.0</b>
+              </span>
+            </footer>
+          </>
+        )}
+      </main>
+      {notice && (
+        <div role="status" className={`toast ${notice.error ? "error" : ""}`}>
+          <span>
+            {notice.error ? <CircleHelp size={17} /> : <Check size={17} />}
+          </span>
+          <p>{notice.text}</p>
+          <button aria-label="关闭提示" onClick={() => setNotice(undefined)}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
+      {current && (
+        <div className="overlay" onClick={() => setDetail(undefined)}>
+          <section
+            className="drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${current.name} 详情`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="drawer-heading">
+              <div>
+                <span className="eyebrow">AGENT CONFIGURATION</span>
+                <h2>{current.name}</h2>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="关闭详情"
+                onClick={() => setDetail(undefined)}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <p className="adapter-note">{current.note}</p>
+            <div className="config-blocks">
+              {(
+                [
+                  {
+                    key: "memory",
+                    name: "记忆文件",
+                    value: current.memory.path,
+                    approved: current.memoryApproved,
+                    error: current.memory.error,
+                  },
+                  {
+                    key: "skills",
+                    name: "技能目录",
+                    value: current.skills.path,
+                    approved: current.skillsApproved,
+                    error: current.skills.error,
+                  },
+                  {
+                    key: "executable",
+                    name: "原生可执行文件",
+                    value: current.executable,
+                    approved: current.executableApproved,
+                    error: undefined,
+                  },
+                  {
+                    key: "workspace",
+                    name: "运行工作目录",
+                    value: current.workspace,
+                    approved: !!current.workspace,
+                    error: undefined,
+                  },
+                ] as const
+              ).map((f) => (
+                <div className="config-block" key={f.key}>
+                  <div>
+                    <h3>{f.name}</h3>
+                    <Badge tone={f.approved ? "green" : "muted"}>
+                      {f.approved ? "已授权" : "未授权"}
+                    </Badge>
+                  </div>
+                  <Path value={f.value} />
+                  {f.error && <p className="error-text">{f.error}</p>}
+                  <div className="inline-actions">
+                    <button
+                      className="small"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(() => api!.pick(current.id, f.key))
+                      }
+                    >
+                      <Folder size={13} />
+                      选择并授权
+                    </button>
+                    {f.approved && (
+                      <button
+                        className="ghost small"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(() =>
+                            api!.clear(current.id, f.key as PathKind),
+                          )
+                        }
+                      >
+                        撤销授权
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="drawer-section">
+              <div className="section-title">
+                <span>
+                  <Database size={16} />
+                  快照
+                </span>
+              </div>
+              <button
+                disabled={
+                  busy || (!current.memoryApproved && !current.skillsApproved)
+                }
+                onClick={() => void run(() => api!.backup(current.id))}
+              >
+                <ArrowDownToLine size={14} />
+                备份当前记忆与技能
+              </button>
+            </div>
+            <div className="drawer-section">
+              <div className="section-title">
+                <span>
+                  <Terminal size={16} />
+                  本地进程
+                </span>
+                <Badge tone={current.process.running ? "green" : "muted"}>
+                  {current.process.running
+                    ? `运行中 · ${current.process.pid}`
+                    : "无所属运行进程"}
+                </Badge>
+              </div>
+              {current.mode === "cli" && (
+                <>
+                  <label className="field-label" htmlFor="task">
+                    单次任务（使用现有 Claude 登录与权限）
+                  </label>
+                  <textarea
+                    id="task"
+                    placeholder="例如：概述当前工作目录中的项目结构"
+                    value={prompt}
+                    maxLength={16000}
+                    onChange={(e) => setPrompt(e.target.value)}
+                  />
+                </>
+              )}
+              <div className="inline-actions">
+                <button
+                  className="primary"
+                  disabled={
+                    busy ||
+                    current.process.running ||
+                    !current.executableApproved ||
+                    !current.workspace ||
+                    (current.mode === "cli" && !prompt.trim())
+                  }
+                  onClick={() =>
+                    void run(() =>
+                      api!.launch(
+                        current.id,
+                        current.mode === "cli" ? prompt : undefined,
+                      ),
+                    )
+                  }
+                >
+                  <Play size={14} />
+                  {current.mode === "cli" ? "运行任务" : "启动程序"}
+                </button>
+                <button
+                  disabled={busy || !current.process.running}
+                  onClick={() => void run(() => api!.stop(current.id))}
+                >
+                  <Pause size={14} />
+                  停止所属进程
+                </button>
+              </div>
+              <p className="footnote">
+                需先绑定 EXE
+                和工作目录。只追踪直接子进程；外部程序和独立子进程状态未知。
+              </p>
+              {current.process.exitCode !== undefined && (
+                <p className="secondary">
+                  最近进程退出码：{current.process.exitCode ?? "被信号终止"}
+                </p>
+              )}
+              {current.process.error && (
+                <p className="error-text">{current.process.error}</p>
+              )}
+              {current.mode === "cli" && (
+                <pre className="terminal-output">
+                  {current.process.output ||
+                    "任务输出将在这里显示。内容仅保留在内存中，最多显示最近 32,000 字符。"}
+                </pre>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+      {plan && (
+        <div
+          className="overlay plan-overlay"
+          onClick={() => !busy && setPlan(undefined)}
+        >
+          <section
+            className="plan-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="同步与恢复预览"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="drawer-heading">
+              <div>
+                <span className="eyebrow">REVIEW BEFORE WRITE</span>
+                <h2>同步与恢复预览</h2>
+              </div>
+              <button
+                className="icon-button"
+                disabled={busy}
+                aria-label="关闭预览"
+                onClick={() => setPlan(undefined)}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="plan-summary">
+              <Badge tone={plan.items.length ? "amber" : "green"}>
+                {plan.items.length
+                  ? `${plan.items.length} 个待写入文件`
+                  : "无需变更"}
+              </Badge>
+              <span>
+                <Clock3 size={13} />
+                预览有效至 {time(plan.expiresAt)}
+              </span>
+              <span>写入前自动备份 · 不删除文件</span>
+            </div>
+            {plan.skipped.length > 0 && (
+              <div className="plan-skips">
+                {plan.skipped.map((s, i) => (
+                  <p key={i}>{s}</p>
+                ))}
+              </div>
+            )}
+            {plan.items.length > 0 ? (
+              <>
+                <div className="plan-files">
+                  {plan.items.map((item, i) => (
+                    <button
+                      key={item.target}
+                      className={i === planIndex ? "selected" : ""}
+                      onClick={() => setPlanIndex(i)}
+                    >
+                      <span>
+                        {item.before ? "替换" : "新增"} ·{" "}
+                        {data?.agents.find((a) => a.id === item.agent)?.name}
+                      </span>
+                      <code>{item.target}</code>
+                      <span>{item.bytes.toLocaleString()} B</span>
+                    </button>
+                  ))}
+                </div>
+                {plan.items[planIndex] && (
+                  <>
+                    <div className="diff-paths">
+                      <span>
+                        来源 <code>{plan.items[planIndex].source}</code>
+                      </span>
+                      <span>
+                        目标 <code>{plan.items[planIndex].target}</code>
+                      </span>
+                    </div>
+                    <div className="diff">
+                      <div>
+                        <h4>
+                          当前内容{" "}
+                          <span>
+                            {plan.items[planIndex].before?.slice(0, 12) ||
+                              "文件尚不存在"}
+                          </span>
+                        </h4>
+                        <pre>{plan.items[planIndex].oldText || "（空）"}</pre>
+                      </div>
+                      <div>
+                        <h4>
+                          写入后{" "}
+                          <span>
+                            {plan.items[planIndex].after.slice(0, 12)}
+                          </span>
+                        </h4>
+                        <pre>{plan.items[planIndex].newText || "（空）"}</pre>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <Empty>
+                所选已授权目标与来源一致，或没有可写入的已授权目标。
+              </Empty>
+            )}
+            <div className="plan-footer">
+              <span>
+                <ShieldCheck size={15} />
+                执行前会再次检查源文件和目标指纹
+              </span>
+              <button disabled={busy} onClick={() => setPlan(undefined)}>
+                取消
+              </button>
+              <button
+                className="primary"
+                disabled={!plan.items.length || busy}
+                onClick={() =>
+                  void run(async () => {
+                    const result = await api!.apply(plan.id);
+                    setPlan(undefined);
+                    return result;
+                  })
+                }
+              >
+                {busy ? (
+                  <LoaderCircle size={15} className="spin" />
+                ) : (
+                  <Check size={15} />
+                )}
+                确认并执行
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}

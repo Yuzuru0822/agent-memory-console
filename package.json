@@ -1,0 +1,62 @@
+{
+  "name": "agent-memory-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Windows agent memory and skills console",
+  "author": "Agent Console",
+  "license": "MIT",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "npm run build:main && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CONSOLE_DEV=1 electron .\"",
+    "build:main": "tsc -p tsconfig.electron.json",
+    "build": "tsc --noEmit -p tsconfig.json && npm run build:main && vite build",
+    "start": "electron .",
+    "test": "tsx --test tests/*.test.ts",
+    "test:desktop": "node tests/desktop.cjs",
+    "pack": "npm run build && electron-builder --win --x64 --dir",
+    "dist": "npm run build && electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.0",
+    "cross-env": "^10.0.0",
+    "electron": "45.0.0",
+    "electron-builder": "^26.0.12",
+    "playwright": "^1.58.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.2.0",
+    "wait-on": "^9.0.0"
+  },
+  "build": {
+    "appId": "local.agent.memory.console",
+    "productName": "Agent Memory Console",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "Agent-Memory-Console-${version}-win-x64.exe"
+    }
+  }
+}
