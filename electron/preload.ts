@@ -1,6 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ConsoleApi } from "../src/shared";
 const api: ConsoleApi = {
+  repositorySnapshot: () => ipcRenderer.invoke("console:repositorySnapshot"),
+  repositoryChoose: () => ipcRenderer.invoke("console:repositoryChoose"),
+  repositoryReveal: () => ipcRenderer.invoke("console:repositoryReveal"),
+  repositoryMembers: ids => ipcRenderer.invoke("console:repositoryMembers", ids),
+  repositoryMemoryFolder: id => ipcRenderer.invoke("console:repositoryMemoryFolder", id),
+  repositoryPreview: () => ipcRenderer.invoke("console:repositoryPreview"),
+  repositoryCancelPreview: () => ipcRenderer.invoke("console:repositoryCancelPreview"),
+  repositoryApply: (id, choices) => ipcRenderer.invoke("console:repositoryApply", id, choices),
+  repositoryCommit: () => ipcRenderer.invoke("console:repositoryCommit"),
+  repositoryAutomation: options => ipcRenderer.invoke("console:repositoryAutomation", options),
+  repositoryCleanup: () => ipcRenderer.invoke("console:repositoryCleanup"),
+  repositoryLinkPreview: id => ipcRenderer.invoke("console:repositoryLinkPreview", id),
+  repositoryLinkApply: (id, choices) => ipcRenderer.invoke("console:repositoryLinkApply", id, choices),
+  repositoryUnlink: id => ipcRenderer.invoke("console:repositoryUnlink", id),
   approveNpm: () => ipcRenderer.invoke("console:approveNpm"),
   approveSkillLinks: (id) => ipcRenderer.invoke("console:approveSkillLinks", id),
   snapshot: () => ipcRenderer.invoke("console:snapshot"),

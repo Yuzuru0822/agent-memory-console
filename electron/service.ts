@@ -114,6 +114,18 @@ export class ConsoleService {
     if (this.protectedRoots.some((root) => within(root, p)))
       throw new Error("不能写入系统、应用或控制台数据目录");
   }
+  assertWritablePath(p: string): void { this.ensureWritable(p); }
+  checkRepositorySkill(id: AgentId, logical: string, expectedReal?: string): string {
+    const c = this.settings(id);
+    if (!c.skills || samePath(c.skills, logical)) throw new Error("请先授权 Agent 技能目录");
+    const real = this.skillPath(c.skills, c.skillsAccess, logical, expectedReal);
+    this.ensureWritable(real);
+    return real;
+  }
+  persistRepository(): void {
+    if (!this.verifyAudit().valid) throw new Error("活动台账校验失败");
+    this.save();
+  }
   prepareSkills(selected: string): SkillAccess {
     const root = localPath(selected), resolved = resolveSkillPath(root);
     if (!fs.statSync(resolved.real).isDirectory()) throw new Error("技能路径必须是文件夹");

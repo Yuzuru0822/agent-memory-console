@@ -1,6 +1,6 @@
 {
   "name": "agent-memory-console",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "description": "Local Windows agent memory and skills console",
   "author": "Agent Console",
@@ -17,7 +17,9 @@
     "dist": "npm run build && electron-builder --win portable --x64"
   },
   "dependencies": {
+    "isomorphic-git": "1.44.3",
     "lucide-react": "^0.468.0",
+    "node-diff3": "3.2.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

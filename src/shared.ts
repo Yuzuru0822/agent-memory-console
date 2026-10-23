@@ -1,5 +1,6 @@
 import type { ClaudeNpmInstallation } from "../electron/claude-npm";
 import type { SkillLink } from "../electron/skill-paths";
+import type { RepositoryApi, RepositoryConfig } from "./repository-types";
 
 export interface SkillAccess {
   root: string;
@@ -25,6 +26,7 @@ export interface Config {
   canonicalMemory?: string;
   canonicalSkills?: string;
   canonicalSkillsAccess?: SkillAccess;
+  repository?: RepositoryConfig;
 }
 export interface FileInfo {
   path: string;
@@ -124,7 +126,7 @@ export interface Plan {
 export interface Result {
   message: string;
 }
-export interface ConsoleApi {
+export interface ConsoleApi extends RepositoryApi {
   snapshot(): Promise<Snapshot>;
   pick(id: AgentId | null, kind: PickKind): Promise<Result>;
   approveNpm(): Promise<Result>;

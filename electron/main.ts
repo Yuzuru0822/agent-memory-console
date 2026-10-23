@@ -7,6 +7,8 @@ import fs from "node:fs";
 import { createAdapters } from "./adapters";
 import { ConsoleService } from "./service";
 import { Processes } from "./processes";
+import { RepositoryService } from "./repository-service";
+import type { RepositoryAutomation, RepositoryResolution } from "../src/repository-types";
 import { noLinks } from "./safety";
 import type { AgentId, PickKind, PathKind, SkillAccess } from "../src/shared";
 import { resolveSkillPath } from "./skill-paths";
@@ -23,6 +25,7 @@ const expectedUrl = dev
 let window: BrowserWindow;
 let service: ConsoleService;
 let processes: Processes;
+let repository: RepositoryService;
 let busy = false;
 const validId = (value: unknown): AgentId => {
   if (typeof value !== "string") throw new Error("Agent 参数无效");
@@ -76,6 +79,63 @@ function handler(
   });
 }
 function register() {
+  handler("repositorySnapshot", () => repository.snapshot(), false);
+  handler("repositoryChoose", async () => {
+    const chosen = await dialog.showOpenDialog(window, { title: "选择独立的记忆与技能 Git 仓库目录", properties: ["openDirectory", "createDirectory"] });
+    const selected = chosen.filePaths[0];
+    if (chosen.canceled || !selected) return { message: "已取消选择仓库" };
+    if (!(await confirm("创建或打开本地 Git 仓库", `${selected}\n\n请使用独立的空目录，或本控制台已创建的仓库。仓库会包含 memories/<Agent>/ 和共享 skills/，并保留本地 Git 历史。现有 Agent 内容不会在此步骤移动；后续同步和 junction 连接都有单独预览。不会上传或推送远程。`))) return { message: "已取消创建仓库" };
+    await repository.choose(selected); return { message: "本地 Git 仓库已就绪" };
+  });
+  handler("repositoryReveal", async () => {
+    const root = service.config.repository?.root;
+    if (!root) throw new Error("请先选择仓库"); noLinks(root);
+    const error = await shell.openPath(root); if (error) throw new Error(error);
+    return { message: "已打开仓库目录" };
+  });
+  handler("repositoryMembers", (ids: unknown) => {
+    if (!Array.isArray(ids)) throw new Error("Agent 参数无效"); repository.members(ids.map(validId));
+    return { message: "纳管 Agent 已保存；变更范围后需重新启用自动同步" };
+  });
+  handler("repositoryMemoryFolder", async (id: unknown) => {
+    const agent = validId(id);
+    const chosen = await dialog.showOpenDialog(window,{title:`选择 ${service.adapter(agent).name} 记忆目录`,properties:["openDirectory"]});
+    if (chosen.canceled || !chosen.filePaths[0]) return { message: "已取消记忆目录选择" };
+    const selected = chosen.filePaths[0];
+    if (!(await confirm("授权多文件记忆目录", `${selected}\n\n该目录中的 Markdown、文本、JSON 和 YAML 会与仓库 memories/${agent}/ 双向同步。双方同时修改时进行三方合并，冲突需要人工解决，不传播删除。请勿选择整个用户目录或含凭据的配置目录。`))) return { message: "未授权记忆目录" };
+    repository.memoryFolder(agent,selected); return { message: "记忆目录已保存；自动同步已暂停，待重新启用" };
+  });
+  handler("repositoryPreview", () => repository.preview());
+  handler("repositoryCancelPreview", () => { repository.cancelPreview(); return {message:"预览已关闭，自动任务可继续运行"}; });
+  handler("repositoryApply", async (id: unknown, choices: Record<string,RepositoryResolution>) => {
+    const plan = repository.review(str(id));
+    const paths = plan.files.slice(0,40).map(f=>`${f.agentPath}\n  ↔ ${f.repositoryPath}`).join("\n");
+    if (!(await confirm("执行仓库双向合并", `${plan.files.length} 项合并结果\n${paths}${plan.files.length>40?"\n其余路径见预览列表":""}\n\n写入前保存 Git 版本和原内容快照。不会传播删除，也不会执行技能脚本。`))) return {message:"已取消仓库同步"};
+    const count = await repository.apply(plan.id,choices); return {message:`仓库同步完成：${count} 个文件，已保存 Git 版本`};
+  });
+  handler("repositoryCommit", async () => ({message:await repository.commit()}));
+  handler("repositoryAutomation", async (options: RepositoryAutomation) => {
+    if (!options || typeof options !== "object") throw new Error("自动任务参数无效");
+    const c = service.config.repository;
+    if (!c) throw new Error("请先选择仓库");
+    if ((options.enabled || options.cleanupEnabled) && !(await confirm("启用本地自动任务", `仓库：${c.root}\n纳管 Agent：${c.agentIds.join(", ")}\n自动同步：${options.enabled ? `每 ${options.intervalSeconds} 秒` : "关闭"}\n自动清理：${options.cleanupEnabled ? `保留最近 ${options.retentionDays} 天，至少 ${options.minBackups} 份备份` : "关闭"}\n\n仅在控制台打开时运行。此授权允许上述路径后续自动写入；冲突或授权改变会暂停同步，不传播删除。清理仅涉及本程序完成的过期快照，不删除 Agent 原目录、仓库内容或 Git 历史。`))) return {message:"自动任务设置未更改"};
+    repository.automation(options); return {message:"自动任务设置已保存"};
+  });
+  handler("repositoryCleanup", async () => {
+    if (!(await confirm("清理过期仓库快照", "按当前保留天数与最少份数清理本程序完成的旧快照。未完成快照、原 Agent 目录、记忆、技能和 Git 历史均保留。"))) return {message:"已取消清理"};
+    return {message:`已清理 ${repository.cleanup()} 份过期快照`};
+  });
+  handler("repositoryLinkPreview", (id: unknown) => repository.linkPreview(validId(id)));
+  handler("repositoryLinkApply", async (id: unknown, choices: Record<string,"agent"|"repository">) => {
+    const plan=repository.linkReview(str(id));
+    if (!(await confirm("将 Agent 技能目录连接到仓库", `Agent 入口：${plan.source}\n实际仓库：${plan.target}\n原目录保留在：${plan.backupPath}\n\n将按预览结果汇入完整技能文件，保留脚本与资源但不执行，然后创建 Windows junction。所有已连接 Agent 会立即看到共享技能的修改和直接删除；同步器本身不传播删除。原目录保留，之后可解除连接恢复。${plan.warnings.length?"\n\n注意："+plan.warnings.join("\n"):""}`))) return {message:"已取消技能连接"};
+    return {message:await repository.linkApply(plan.id,choices)};
+  });
+  handler("repositoryUnlink", async (id: unknown) => {
+    const agent=validId(id), receipt=repository.unlinkReview(agent);
+    if (!(await confirm("解除连接并恢复原技能目录", `入口：${receipt.source}\n保留的原目录：${receipt.backupPath}\n\n只移除指向当前仓库的 junction，并还原原目录名称。仓库及其中新内容会保留；连接之后在仓库内新增的内容不会复制到原目录。`))) return {message:"已取消解除连接"};
+    await repository.unlink(agent); return {message:"已恢复原技能目录，仓库内容保留"};
+  });
   handler("snapshot", () => service.snapshot(processes.snapshot()), false);
   handler("approveSkillLinks", async (id: unknown) => {
     const agent = id === null ? null : validId(id);
@@ -252,6 +312,7 @@ else {
         ].filter((s): s is string => !!s),
       );
       processes = new Processes(service);
+      repository = new RepositoryService(service);
       session.defaultSession.setPermissionRequestHandler(
         (_wc, _permission, callback) => callback(false),
       );
@@ -281,8 +342,19 @@ else {
         event.preventDefault(),
       );
       register();
+      const repositoryTimer = setInterval(() => {
+        if (busy || !window || window.isDestroyed()) return;
+        busy = true;
+        void repository.tick().catch(error => console.error("Repository automatic task failed:", String(error))).finally(() => { busy = false; });
+      }, 5000);
+      app.once("before-quit", () => clearInterval(repositoryTimer));
       let closing = false;
       window.on("close", (event) => {
+        if (busy) {
+          event.preventDefault();
+          void dialog.showMessageBox(window, {type:"info",message:"本地操作尚未完成",detail:"请等待当前同步、备份或 Git 保存完成后再关闭控制台。",buttons:["返回控制台"],defaultId:0,noLink:true});
+          return;
+        }
         if (closing || !processes.active().length) return;
         event.preventDefault();
         void dialog

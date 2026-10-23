@@ -41,11 +41,13 @@ import {
   X,
 } from "lucide-react";
 import type { AgentId, AgentView, PathKind, Plan, Snapshot, SkillsInfo } from "./shared";
+import RepositoryPanel from "./RepositoryPanel";
 
 const api = window.consoleApi;
-type Tab = "overview" | "sync" | "backups" | "activity" | "integrations";
+type Tab = "overview" | "repository" | "sync" | "backups" | "activity" | "integrations";
 const nav = [
   { id: "overview", name: "监控总览", icon: LayoutDashboard },
+  { id: "repository", name: "统一仓库", icon: Database },
   { id: "sync", name: "记忆与技能", icon: Layers3 },
   { id: "backups", name: "备份快照", icon: History },
   { id: "activity", name: "活动台账", icon: Activity },
@@ -202,6 +204,13 @@ export default function App() {
 
   function Sources() {
     return (
+      <>
+      <div className="repository-entry">
+        <Database size={26} />
+        <div><strong>用统一 Git 仓库管理所有 Agent</strong><p>独立目录保存多份记忆与共享技能，支持双向合并、定时同步和技能 junction 连接。</p></div>
+        <button className="primary" onClick={() => setTab("repository")}>进入统一仓库<ArrowRight size={14} /></button>
+      </div>
+      <p className="legacy-source-heading">兼容模式 · 现有单文件共享源与单向复制仍可继续使用</p>
       <section className="source-grid" id="sources">
         <div className="panel source-panel">
           <div className="section-title">
@@ -300,6 +309,7 @@ export default function App() {
           </div>
         </div>
       </section>
+      </>
     );
   }
   function Backups({ compact = false }: { compact?: boolean }) {
@@ -805,12 +815,13 @@ export default function App() {
                 <Backups compact />
               </>
             )}
+            {tab === "repository" && <RepositoryPanel onChange={refresh} />}
             {tab === "sync" && (
               <>
                 <div className="page-heading">
-                  <h2>让共同的知识保持一致</h2>
+                  <h2>共享源同步 · 兼容模式</h2>
                   <p>
-                    共享源由你指定。只向已授权的目标同步，不合并或删除内容。
+                    这里保留原有单向同步。多文件记忆、双向合并与自动同步请使用统一仓库。
                   </p>
                 </div>
                 <Sources />
@@ -1025,20 +1036,22 @@ export default function App() {
                       <li>显式授权路径、同步差异、冲突检查与原子文件替换</li>
                       <li>手动快照、写入前备份、恢复预览与活动哈希链</li>
                       <li>受限 IPC、本地 EXE 启动、所属进程停止与 CLI 输出</li>
+                      <li>独立 Git 仓库、多文件记忆分区、双向合并与冲突处理</li>
+                      <li>应用运行期间自动同步、备份保留清理与授权技能 junction</li>
                     </ul>
                   </section>
                   <section className="panel">
                     <div className="section-title">
                       <span>
                         <Unplug size={17} />
-                        尚未实现
+                        能力边界
                       </span>
                     </div>
                     <ul className="capabilities muted-list">
                       <li>厂商登录、额度、历史会话或后台任务 API</li>
                       <li>接管已在运行的第三方进程与跨厂商会话迁移</li>
-                      <li>双向合并、自动同步、自动清理或未经授权的链接写入</li>
-                      <li>技能脚本 / 二进制同步、任意 CMD 或 PowerShell 执行</li>
+                      <li>不自动推送到云端，不将一端的删除传播到另一端</li>
+                      <li>自动同步仅在应用运行期间执行；不执行技能脚本或任意命令</li>
                     </ul>
                   </section>
                 </div>
@@ -1050,7 +1063,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.1.2</b>
+                AGENT MEMORY CONSOLE <b>v0.2.0</b>
               </span>
             </footer>
           </>
