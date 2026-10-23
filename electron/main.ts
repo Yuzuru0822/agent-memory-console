@@ -8,7 +8,8 @@ import { createAdapters } from "./adapters";
 import { ConsoleService } from "./service";
 import { Processes } from "./processes";
 import { noLinks } from "./safety";
-import type { AgentId, PickKind, PathKind } from "../src/shared";
+import type { AgentId, PickKind, PathKind, SkillAccess } from "../src/shared";
+import { resolveSkillPath } from "./skill-paths";
 import type { ClaudeNpmInstallation } from "./claude-npm";
 
 app.setName("Agent Memory Console");
@@ -48,6 +49,8 @@ const confirm = async (message: string, detail: string) => {
 };
 const npmDescription = (npm: ClaudeNpmInstallation) =>
   `npm 包：@anthropic-ai/claude-code ${npm.packageVersion}\n安装入口：${npm.launcher}\n实际程序：${npm.entry}${npm.node ? "\nNode.js：" + npm.node : ""}\n\n将直接启动以上程序，不执行 CMD 脚本。请确认安装来源可信；包名与格式检查不验证厂商签名。`;
+const skillsDescription = (access: SkillAccess, source: boolean) =>
+  `技能目录：${access.root}\n实际根目录：${access.realRoot}\n\n${access.links.length ? access.links.map(l=>`${l.path}\n  → ${l.target}`).join("\n") : "未发现链接"}\n\n${source ? "这些实际位置将作为共享只读源。" : "同步将写入这些实际位置并保留链接。其他使用这些链接的 Agent 也会看到修改。"}每次同步仍需预览和确认；链接目标改变后须重新授权。`;
 function trusted(event: IpcMainInvokeEvent) {
   if (
     event.sender !== window.webContents ||
@@ -74,6 +77,15 @@ function handler(
 }
 function register() {
   handler("snapshot", () => service.snapshot(processes.snapshot()), false);
+  handler("approveSkillLinks", async (id: unknown) => {
+    const agent = id === null ? null : validId(id);
+    const selected = agent === null ? service.config.canonicalSkills : service.paths(agent).skills;
+    if (!selected) throw new Error("请先选择技能目录");
+    const access = service.prepareSkills(selected);
+    if (!(await confirm("授权技能链接与实际位置", skillsDescription(access, agent === null)))) return { message: "未授权技能链接" };
+    service.bindSkills(agent, access);
+    return { message: `已授权技能目录与 ${access.links.length} 个链接映射` };
+  });
   handler("approveNpm", async () => {
     const npm = service.npmCandidate();
     if (!npm) throw new Error("未发现可用 npm 安装，请手动选择 claude.cmd");
@@ -113,6 +125,12 @@ function register() {
     if (chosen.canceled || !chosen.filePaths[0])
       return { message: "已取消选择" };
     const file = chosen.filePaths[0];
+    if (k === "skills" || k === "canonicalSkills") {
+      const access = service.prepareSkills(file);
+      if (!(await confirm("授权技能目录与实际位置", skillsDescription(access, k === "canonicalSkills")))) return { message: "未授权技能目录" };
+      service.bindSkills(agent, access);
+      return { message: `已授权技能目录与 ${access.links.length} 个链接映射` };
+    }
     if (npmAllowed && path.extname(file).toLowerCase() === ".cmd") {
       const npm = service.resolveNpm(file);
       if (!(await confirm("授权 npm 安装", npmDescription(npm)))) return { message: "未授权 npm 安装" };
@@ -145,7 +163,7 @@ function register() {
       plan = service.review(planId);
     if (!plan.items.length) return { message: "文件已一致，无需写入" };
     const details = plan.items
-      .map((i) => `${i.before ? "替换" : "新增"} ${i.target}`)
+      .map((i) => `${i.before ? "替换" : "新增"} ${i.target}${i.targetLogical && i.targetLogical !== i.target ? "\n  技能路径：" + i.targetLogical : ""}`)
       .join("\n");
     if (
       !(await confirm(
@@ -202,7 +220,8 @@ function register() {
       p = kind === "memory" ? paths.memory : paths.skills;
     }
     if (!p || !fs.existsSync(p)) throw new Error("路径不存在");
-    noLinks(p);
+    if (kind === "skills") p = resolveSkillPath(p).real;
+    else noLinks(p);
     shell.showItemInFolder(p);
     return { message: "已在资源管理器定位" };
   });

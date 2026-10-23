@@ -40,7 +40,7 @@ import {
   Unplug,
   X,
 } from "lucide-react";
-import type { AgentId, AgentView, PathKind, Plan, Snapshot } from "./shared";
+import type { AgentId, AgentView, PathKind, Plan, Snapshot, SkillsInfo } from "./shared";
 
 const api = window.consoleApi;
 type Tab = "overview" | "sync" | "backups" | "activity" | "integrations";
@@ -90,6 +90,25 @@ function Path({ value }: { value?: string }) {
       {value || "尚未选择本地路径"}
     </code>
   );
+}
+
+function SkillLinks({ info }: { info?: SkillsInfo }) {
+  if (!info) return null;
+  return <div className="skill-links">
+    {!!info.links?.length && <details>
+      <summary>{info.links.length} 个链接 / junction · 查看实际位置</summary>
+      <div className="skill-link-list">
+        {info.links.map(link => <div key={link.path}>
+          <Path value={link.path} />
+          <span className="secondary">指向{link.kind === "directory" ? "目录" : "文件"}</span>
+          <Path value={link.target} />
+        </div>)}
+      </div>
+      <p className="footnote">同步会写入实际位置，保留原链接；共用该位置的其他 Agent 也会看到变更。</p>
+    </details>}
+    {info.warnings?.map((warning, index) => <p className="error-text" key={index}>{warning}</p>)}
+    {!!info.warnings?.length && <p className="footnote">有效项目仍已计入统计。请修复以上项目后，再授权同步。</p>}
+  </div>;
 }
 
 export default function App() {
@@ -240,17 +259,17 @@ export default function App() {
           <div className="source-stats">
             <span>
               SKILL.md <strong>{data?.canonicalSkills.count || 0}</strong>{" "}
-              <span className="dot-separator">·</span> 文本文件{" "}
+              <span className="dot-separator">·</span> 文本候选{" "}
               <strong>{data?.canonicalSkills.files || 0}</strong>
             </span>
             <Badge
               tone={
-                data?.canonicalSkills.exists && !data.canonicalSkills.error
+                data?.canonicalSkills.warnings?.length ? "amber" : data?.canonicalSkills.exists && !data.canonicalSkills.error
                   ? "green"
                   : "muted"
               }
             >
-              {data?.canonicalSkills.exists && !data.canonicalSkills.error
+              {data?.canonicalSkills.warnings?.length ? "部分项目需检查" : data?.canonicalSkills.exists && !data.canonicalSkills.error
                 ? "目录可读"
                 : "待检查"}
             </Badge>
@@ -258,6 +277,7 @@ export default function App() {
           {data?.canonicalSkills.error && (
             <p className="error-text">{data.canonicalSkills.error}</p>
           )}
+          <SkillLinks info={data?.canonicalSkills} />
           <div className="inline-actions">
             <button
               disabled={busy}
@@ -266,6 +286,9 @@ export default function App() {
               <Folder size={14} />
               选择技能源
             </button>
+            {data?.canonicalSkills.linked && <button disabled={busy} onClick={() => void run(() => api!.approveSkillLinks(null))}>
+              <ShieldCheck size={14} />授权技能链接
+            </button>}
             <button
               className="ghost"
               disabled={!data?.canonicalSkills.exists || busy}
@@ -880,17 +903,19 @@ export default function App() {
                         <strong>{a.name}</strong>
                         <Badge
                           tone={
-                            a.skills.error
+                            a.skills.error || a.skills.warnings?.length
                               ? "amber"
                               : a.skills.exists
                                 ? "green"
                                 : "muted"
                           }
                         >
-                          {a.skills.linked
-                            ? "链接：不遍历"
-                            : a.skills.error
+                          {a.skills.error
                               ? "检查失败"
+                              : a.skills.warnings?.length
+                                ? "部分项目需检查"
+                                : a.skills.linked
+                                  ? `含 ${a.skills.links?.length || 0} 个链接`
                               : a.skills.exists
                                 ? "可读取"
                                 : "未发现"}
@@ -899,8 +924,9 @@ export default function App() {
                       <Path value={a.skills.path} />
                       <p>
                         {a.skills.error ||
-                          `${a.skills.count} 个 SKILL.md · ${a.skills.files} 个可同步文本文件`}
+                          `${a.skills.count} 个 SKILL.md · ${a.skills.files} 个文本候选`}
                       </p>
+                      <SkillLinks info={a.skills} />
                     </div>
                   ))}
                 </section>
@@ -1011,7 +1037,7 @@ export default function App() {
                     <ul className="capabilities muted-list">
                       <li>厂商登录、额度、历史会话或后台任务 API</li>
                       <li>接管已在运行的第三方进程与跨厂商会话迁移</li>
-                      <li>双向合并、自动同步、自动清理或 junction 写入</li>
+                      <li>双向合并、自动同步、自动清理或未经授权的链接写入</li>
                       <li>技能脚本 / 二进制同步、任意 CMD 或 PowerShell 执行</li>
                     </ul>
                   </section>
@@ -1024,7 +1050,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.1.1</b>
+                AGENT MEMORY CONSOLE <b>v0.1.2</b>
               </span>
             </footer>
           </>
@@ -1129,6 +1155,10 @@ export default function App() {
                   </div>
                   <Path value={f.value} />
                   {f.error && <p className="error-text">{f.error}</p>}
+                  {f.key === "skills" && <>
+                    <p className="secondary">{current.skills.count} 个 SKILL.md · {current.skills.files} 个文本候选</p>
+                    <SkillLinks info={current.skills} />
+                  </>}
                   <div className="inline-actions">
                     <button
                       className="small"
@@ -1140,6 +1170,9 @@ export default function App() {
                       <Folder size={13} />
                       选择并授权
                     </button>
+                    {f.key === "skills" && current.skills.linked && <button className="small" disabled={busy} onClick={() => void run(() => api!.approveSkillLinks(current.id))}>
+                      <ShieldCheck size={13} />授权技能链接
+                    </button>}
                     {f.approved && (
                       <button
                         className="ghost small"
@@ -1154,6 +1187,7 @@ export default function App() {
                       </button>
                     )}
                   </div>
+                  {f.key === "skills" && current.skills.linked && <p className="footnote">首次使用链接同步，或链接指向变化后，请授权技能链接并确认实际位置。</p>}
                 </div>
               ))}
             </div>
@@ -1319,11 +1353,13 @@ export default function App() {
                   <>
                     <div className="diff-paths">
                       <span>
-                        来源 <code>{plan.items[planIndex].source}</code>
+                        实际来源 <code>{plan.items[planIndex].source}</code>
                       </span>
                       <span>
-                        目标 <code>{plan.items[planIndex].target}</code>
+                        实际目标 <code>{plan.items[planIndex].target}</code>
                       </span>
+                      {plan.items[planIndex].sourceLogical && plan.items[planIndex].sourceLogical !== plan.items[planIndex].source && <span>来源中的路径 <code>{plan.items[planIndex].sourceLogical}</code></span>}
+                      {plan.items[planIndex].targetLogical && plan.items[planIndex].targetLogical !== plan.items[planIndex].target && <span>Agent 中的路径 <code>{plan.items[planIndex].targetLogical}</code></span>}
                     </div>
                     <div className="diff">
                       <div>

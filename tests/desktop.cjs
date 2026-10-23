@@ -22,6 +22,9 @@ const path = require("node:path");
   const source = path.join(fixture, "shared", "MEMORY.md");
   const skillSource = path.join(fixture, "shared", "skills");
   const skillTarget = path.join(home, ".workbuddy", "skills");
+  const skillActual = path.join(fixture, "linked-library", "review");
+  const skillLink = path.join(skillTarget, "review");
+  const skillBefore = "# Earlier review skill\n";
   const before = "# Local memory\n\nExisting notes, preserved in backup.\n";
   const after = "# Shared memory\n\nUse UTF-8. Keep changes reviewable.\n";
   write(target, before);
@@ -31,9 +34,11 @@ const path = require("node:path");
     "---\nname: review\ndescription: Review a change\n---\nCheck correctness and safety.\n",
   );
   write(
-    path.join(skillTarget, "review", "SKILL.md"),
-    "# Earlier review skill\n",
+    path.join(skillActual, "SKILL.md"),
+    skillBefore,
   );
+  fs.mkdirSync(skillTarget, { recursive: true });
+  fs.symlinkSync(skillActual, skillLink, process.platform === "win32" ? "junction" : "dir");
   write(path.join(home, ".trae-cn", "memory", "user_profile.md"), after);
   write(
     path.join(home, ".trae-cn", "skills", "planning", "SKILL.md"),
@@ -98,6 +103,57 @@ const path = require("node:path");
       contextIsolation: true,
       nodeIntegration: false,
     });
+    const linkedBefore = (await page.evaluate(() => window.consoleApi.snapshot()))
+      .agents.find((agent) => agent.id === "workbuddy");
+    assert.equal(linkedBefore.skills.count, 1);
+    assert.equal(linkedBefore.skills.linked, true);
+    assert.equal(linkedBefore.skills.error, undefined);
+    assert.equal(linkedBefore.skills.links.length, 1);
+    assert.equal(linkedBefore.skills.links[0].target, skillActual);
+    const readSkillsGrant = () => JSON.parse(fs.readFileSync(
+      path.join(data, "console-data", "config.json"), "utf8",
+    )).agents.workbuddy.skillsAccess;
+    assert.equal(readSkillsGrant(), undefined, "legacy folder grant must not authorize linked destinations");
+    const unapprovedLinksDenied = await page.evaluate(async () => {
+      try {
+        await window.consoleApi.preview("skills", ["workbuddy"]);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.equal(unapprovedLinksDenied, true);
+    await page.locator(".agent-card").filter({ hasText: "WorkBuddy" })
+      .getByRole("button", { name: /查看检查与配置/ }).click();
+    const linkedDetails = page.getByRole("dialog", { name: "WorkBuddy 详情" });
+    await linkedDetails.waitFor();
+    assert.match(await linkedDetails.innerText(), /1\s*个.*链接/);
+    assert.doesNotMatch(await linkedDetails.innerText(), /技能目录包含链接或 junction；只读展示，拒绝遍历与同步/);
+    const linkApproval = linkedDetails.getByRole("button", { name: /授权.*技能.*链接|授权当前链接/ });
+    await linkApproval.waitFor();
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
+    });
+    await linkApproval.click();
+    await page.waitForFunction(() => document.querySelector('[role="status"]')?.textContent.includes("未授权技能链接"));
+    assert.equal(readSkillsGrant(), undefined, "cancel must not grant a linked destination");
+    assert.equal(fs.readFileSync(path.join(skillActual, "SKILL.md"), "utf8"), skillBefore);
+    await app.evaluate(({ dialog }, mapping) => {
+      dialog.showMessageBox = async (_window, options) => {
+        if (!options.detail.includes(mapping.link) || !options.detail.includes(mapping.actual))
+          throw new Error("skill confirmation must show both the logical link and actual destination");
+        return { response: 1, checkboxChecked: false };
+      };
+    }, { link: skillLink, actual: skillActual });
+    await linkApproval.click();
+    await page.waitForFunction(() => document.querySelector('[role="status"]')?.textContent.includes("已授权技能目录"));
+    const approvedSkills = readSkillsGrant();
+    assert.equal(approvedSkills.root, skillTarget);
+    assert.equal(approvedSkills.links.length, 1);
+    assert.equal(approvedSkills.links[0].target, skillActual);
+    assert.equal(fs.lstatSync(skillLink).isSymbolicLink(), true);
+    await page.screenshot({ path: path.join(results, "linked-skills.png") });
+    await page.getByRole("button", { name: "关闭详情", exact: true }).click();
     await page.getByLabel("选择 WorkBuddy", { exact: true }).check();
     await page
       .getByRole("button", { name: "预览记忆同步", exact: true })
@@ -151,6 +207,20 @@ const path = require("node:path");
       fs.readFileSync(path.join(skillTarget, "review", "SKILL.md"), "utf8"),
       fs.readFileSync(path.join(skillSource, "review", "SKILL.md"), "utf8"),
     );
+    assert.equal(
+      fs.readFileSync(path.join(skillActual, "SKILL.md"), "utf8"),
+      fs.readFileSync(path.join(skillSource, "review", "SKILL.md"), "utf8"),
+      "skill synchronization must update the approved actual destination",
+    );
+    assert.equal(fs.lstatSync(skillLink).isSymbolicLink(), true);
+    const linkedState = await page.evaluate(() => window.consoleApi.snapshot());
+    const skillBackup = linkedState.backups.find((backup) => !state.backups.some((old) => old.id === backup.id));
+    assert.ok(skillBackup, "linked skill sync must create a backup");
+    const skillRestore = await page.evaluate((id) => window.consoleApi.restore(id), skillBackup.id);
+    await page.evaluate((id) => window.consoleApi.apply(id), skillRestore.id);
+    assert.equal(fs.readFileSync(path.join(skillActual, "SKILL.md"), "utf8"), skillBefore);
+    assert.equal(fs.readFileSync(path.join(skillLink, "SKILL.md"), "utf8"), skillBefore);
+    assert.equal(fs.lstatSync(skillLink).isSymbolicLink(), true, "restore must preserve the junction");
     const restore = await page.evaluate(
       (id) => window.consoleApi.restore(id),
       state.backups[0].id,
@@ -249,7 +319,7 @@ const path = require("node:path");
     });
     assert.deepEqual(errors, []);
     console.log(
-      "PASS desktop: real Electron, six adapters, isolated preload, preview, cancel, memory/skills sync, backups, restore, invalid IPC, launch authorization, npm discovery/cancel/approval/revocation, navigation, responsive layout.",
+      "PASS desktop: real Electron, six adapters, isolated preload, linked-skill display/cancel/approval, junction-preserving skill sync/restore, preview, cancel, memory sync, backups, restore, invalid IPC, launch authorization, npm discovery/cancel/approval/revocation, navigation, responsive layout.",
     );
     console.log("Screenshots: " + results);
   } finally {

@@ -1,4 +1,11 @@
 import type { ClaudeNpmInstallation } from "../electron/claude-npm";
+import type { SkillLink } from "../electron/skill-paths";
+
+export interface SkillAccess {
+  root: string;
+  realRoot: string;
+  links: SkillLink[];
+}
 
 export type AgentId =
   "claude" | "workbuddy" | "trae" | "deepseek" | "zcode" | "qwen";
@@ -7,6 +14,7 @@ export type PickKind = PathKind | "canonicalMemory" | "canonicalSkills";
 export interface AgentConfig {
   memory?: string;
   skills?: string;
+  skillsAccess?: SkillAccess;
   executable?: string;
   workspace?: string;
   claudeNpm?: ClaudeNpmInstallation;
@@ -16,6 +24,7 @@ export interface Config {
   agents: Partial<Record<AgentId, AgentConfig>>;
   canonicalMemory?: string;
   canonicalSkills?: string;
+  canonicalSkillsAccess?: SkillAccess;
 }
 export interface FileInfo {
   path: string;
@@ -33,6 +42,9 @@ export interface SkillsInfo {
   count: number;
   files: number;
   linked: boolean;
+  links?: SkillLink[];
+  warnings?: string[];
+  truncated?: boolean;
   error?: string;
 }
 export interface AgentView {
@@ -99,6 +111,8 @@ export interface PlanItem {
   bytes: number;
   oldText: string;
   newText: string;
+  sourceLogical?: string;
+  targetLogical?: string;
 }
 export interface Plan {
   id: string;
@@ -114,6 +128,7 @@ export interface ConsoleApi {
   snapshot(): Promise<Snapshot>;
   pick(id: AgentId | null, kind: PickKind): Promise<Result>;
   approveNpm(): Promise<Result>;
+  approveSkillLinks(id: AgentId | null): Promise<Result>;
   clear(id: AgentId, kind: PathKind): Promise<Result>;
   preview(mode: "memory" | "skills", ids: AgentId[]): Promise<Plan>;
   apply(planId: string): Promise<Result>;

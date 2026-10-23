@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { ConsoleApi } from "../src/shared";
 const api: ConsoleApi = {
   approveNpm: () => ipcRenderer.invoke("console:approveNpm"),
+  approveSkillLinks: (id) => ipcRenderer.invoke("console:approveSkillLinks", id),
   snapshot: () => ipcRenderer.invoke("console:snapshot"),
   pick: (id, kind) => ipcRenderer.invoke("console:pick", id, kind),
   clear: (id, kind) => ipcRenderer.invoke("console:clear", id, kind),

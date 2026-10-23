@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import type { Adapter } from "./adapters";
 import { discoverClaudeNpm, resolveClaudeNpm, validateClaudeNpm, type ClaudeNpmInstallation } from "./claude-npm";
+import { resolveSkillPath, scanSkills } from "./skill-paths";
 import {
   atomicWrite,
   digest,
@@ -11,7 +12,6 @@ import {
   nativeExecutable,
   noLinks,
   readText,
-  textTree,
   within,
   MAX_FILES,
   MAX_TOTAL,
@@ -31,6 +31,7 @@ import type {
   SkillsInfo,
   Snapshot,
   AgentView,
+  SkillAccess,
 } from "../src/shared";
 
 interface StoredPlan {
@@ -38,8 +39,10 @@ interface StoredPlan {
   configHash: string;
 }
 interface Manifest extends Backup {
-  entries: { target: string; file: string; hash: string }[];
+  entries: { target: string; file: string; hash: string; logicalTarget?: string }[];
 }
+const pathKey = (p: string) => process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p);
+const samePath = (a: string, b: string) => pathKey(a) === pathKey(b);
 export class ConsoleService {
   config: Config;
   private plans = new Map<string, StoredPlan>();
@@ -49,9 +52,11 @@ export class ConsoleService {
     readonly adapters: Adapter[],
     protectedRoots: string[] = [],
   ) {
-    this.protectedRoots = [storage, ...protectedRoots].map((p) =>
-      path.resolve(p),
-    );
+    this.protectedRoots = [storage, ...protectedRoots].flatMap((p) => {
+      const absolute = path.resolve(p);
+      if (absolute === path.parse(absolute).root) return [absolute];
+      return [absolute, resolveSkillPath(absolute).real];
+    });
     noLinks(storage);
     fs.mkdirSync(storage, { recursive: true });
     const cfg = path.join(storage, "config.json");
@@ -109,17 +114,55 @@ export class ConsoleService {
     if (this.protectedRoots.some((root) => within(root, p)))
       throw new Error("不能写入系统、应用或控制台数据目录");
   }
-  private allowedTarget(id: AgentId, target: string): void {
+  prepareSkills(selected: string): SkillAccess {
+    const root = localPath(selected), resolved = resolveSkillPath(root);
+    if (!fs.statSync(resolved.real).isDirectory()) throw new Error("技能路径必须是文件夹");
+    const tree = scanSkills(root, { inspection: true });
+    if (tree.truncated || tree.links.length > 256) throw new Error("技能目录或链接过多，请选择较小的目录后授权");
+    if (tree.warnings.length) throw new Error(`技能目录存在需要修复的项目，修复后再授权同步：${tree.warnings[0]}`);
+    return { root, realRoot: resolved.real, links: tree.links };
+  }
+  bindSkills(id: AgentId | null, access: SkillAccess): void {
+    if (!this.verifyAudit().valid) throw new Error("活动台账校验失败，已阻止授权变更");
+    const fresh = this.prepareSkills(access.root);
+    if (digest(JSON.stringify(fresh)) !== digest(JSON.stringify(access))) throw new Error("技能链接在确认期间变化，请重新授权");
+    if (id !== null) {
+      this.ensureWritable(fresh.realRoot);
+      for (const link of fresh.links) this.ensureWritable(link.target);
+      this.config.agents[id] = { ...this.settings(id), skills: fresh.root, skillsAccess: fresh };
+    } else {
+      this.config.canonicalSkills = fresh.root;
+      this.config.canonicalSkillsAccess = fresh;
+    }
+    this.save();
+    this.audit("path.bind", `${id || "shared"} · skills · ${fresh.root} → ${fresh.realRoot} · ${fresh.links.length} 个链接`);
+  }
+  private skillPath(root: string, access: SkillAccess | undefined, logical: string, expectedReal?: string): string {
+    if (!within(root, logical)) throw new Error("技能路径不在当前授权目录中");
+    const actualRoot = resolveSkillPath(root), resolved = resolveSkillPath(logical);
+    if (access && (!samePath(access.root, root) || !samePath(access.realRoot, actualRoot.real)))
+      throw new Error("技能根目录链接已变化，请重新授权");
+    for (const link of resolved.links) {
+      if (!access?.links.some(a => samePath(a.path, link.path) && samePath(a.target, link.target) && a.kind === link.kind))
+        throw new Error(`技能链接尚未授权或已改变，请重新授权：${link.path}`);
+    }
+    if (expectedReal && !samePath(resolved.real, expectedReal)) throw new Error("技能链接在预览后变化，请重新授权并预览");
+    return resolved.real;
+  }
+  private allowedTarget(id: AgentId, target: string, logicalTarget?: string): void {
     this.ensureWritable(target);
     const c = this.settings(id);
     if (c.memory && path.resolve(c.memory) === path.resolve(target)) return;
     if (
       c.skills &&
-      within(c.skills, target) &&
-      path.resolve(c.skills) !== path.resolve(target) &&
-      TEXT_EXT.has(path.extname(target).toLowerCase())
-    )
+      within(c.skills, logicalTarget || target) &&
+      !samePath(c.skills, logicalTarget || target) &&
+      TEXT_EXT.has(path.extname(target).toLowerCase()) &&
+      TEXT_EXT.has(path.extname(logicalTarget || target).toLowerCase())
+    ) {
+      this.skillPath(c.skills, c.skillsAccess, logicalTarget || target, target);
       return;
+    }
     throw new Error("目标不在当前明确授权的记忆文件或技能目录中");
   }
   private save(): void {
@@ -130,6 +173,11 @@ export class ConsoleService {
     this.plans.clear();
   }
   bind(id: AgentId | null, kind: PickKind, selected: string): void {
+    if (kind === "skills" || kind === "canonicalSkills") {
+      if ((kind === "canonicalSkills") !== (id === null)) throw new Error("技能路径参数无效");
+      this.bindSkills(id, this.prepareSkills(selected));
+      return;
+    }
     if (kind === "executable" && id === "claude" && path.extname(selected).toLowerCase() === ".cmd") {
       this.bindNpm(this.resolveNpm(selected));
       return;
@@ -157,10 +205,9 @@ export class ConsoleService {
     } else if (kind === "executable") {
       nativeExecutable(p);
     } else if (!stat.isDirectory()) throw new Error("请选择文件夹");
-    if (kind === "memory" || kind === "skills") this.ensureWritable(p);
-    if (kind === "canonicalMemory" || kind === "canonicalSkills") {
+    if (kind === "memory") this.ensureWritable(p);
+    if (kind === "canonicalMemory") {
       if (id !== null) throw new Error("共享源参数无效");
-      if (kind === "canonicalSkills") textTree(p);
       this.config[kind] = p;
     } else {
       if (!id) throw new Error("请选择 Agent");
@@ -179,6 +226,7 @@ export class ConsoleService {
     const c = this.settings(id);
     delete c[kind];
     if (kind === "executable") delete c.claudeNpm;
+    if (kind === "skills") delete c.skillsAccess;
     this.save();
     this.audit("path.clear", `${id} · ${kind}`);
   }
@@ -212,13 +260,16 @@ export class ConsoleService {
     if (!p)
       return { path: "", exists: false, count: 0, files: 0, linked: false };
     try {
-      const t = textTree(p);
+      const t = scanSkills(p, { inspection: true });
       return {
         path: p,
         exists: true,
         count: t.skills,
         files: t.files.length,
-        linked: false,
+        linked: t.links.length > 0,
+        links: t.links,
+        warnings: t.warnings,
+        truncated: t.truncated,
       };
     } catch (e) {
       const msg = (e as Error).message;
@@ -252,7 +303,7 @@ export class ConsoleService {
             ? p.executable
             : undefined;
         const state =
-          memory.error || skills.error
+          memory.error || skills.error || skills.warnings?.length
             ? "attention"
             : memory.exists && skills.exists
               ? "ready"
@@ -319,8 +370,10 @@ export class ConsoleService {
     kind: PlanItem["kind"],
     source: string,
     target: string,
+    sourceLogical?: string,
+    targetLogical?: string,
   ): PlanItem | null {
-    this.allowedTarget(agent, target);
+    this.allowedTarget(agent, target, targetLogical);
     const data = readText(source),
       after = digest(data),
       before = hashFile(target);
@@ -335,6 +388,8 @@ export class ConsoleService {
       bytes: data.length,
       oldText: before === null ? "" : readText(target).toString("utf8"),
       newText: data.toString("utf8"),
+      sourceLogical,
+      targetLogical,
     };
   }
   preview(mode: "memory" | "skills", ids: AgentId[]): Plan {
@@ -353,10 +408,10 @@ export class ConsoleService {
         ? this.config.canonicalMemory
         : this.config.canonicalSkills;
     if (!source) throw new Error("请先选择共享记忆源或技能源");
-    const tree = mode === "skills" ? textTree(source) : undefined;
+    const tree = mode === "skills" ? scanSkills(source) : undefined;
     if (tree?.skipped)
       skipped.push(
-        `共享技能源排除 ${tree.skipped} 项：隐藏目录、脚本、二进制或构建产物`,
+        `共享技能源排除 ${tree.skipped} 项：隐藏目录、脚本、二进制、构建产物或重复实际文件`,
       );
     for (const id of ids) {
       const c = this.settings(id);
@@ -370,15 +425,26 @@ export class ConsoleService {
       if (mode === "skills") {
         if (within(source, target) || within(target, source))
           throw new Error("技能源与目标目录不能相同或互相嵌套");
-        noLinks(target);
-        if (!fs.statSync(target).isDirectory())
+        const sourceRoot = this.skillPath(source, this.config.canonicalSkillsAccess, source);
+        const targetRoot = this.skillPath(target, c.skillsAccess, target);
+        if (!fs.statSync(targetRoot).isDirectory())
           throw new Error("技能目标目录不存在");
+        const targetScan = scanSkills(target, { inspection: true });
+        const sourceRoots = [sourceRoot, ...tree!.links.map(l=>l.target)];
+        const targetRoots = [targetRoot, ...targetScan.links.map(l=>l.target)];
+        if (sourceRoots.some(s=>targetRoots.some(t=>within(s,t) || within(t,s))))
+          throw new Error("技能源与目标的实际目录不能相同或互相嵌套；可能已通过链接共享，无需重复复制");
         for (const src of tree!.files) {
+          this.skillPath(source, this.config.canonicalSkillsAccess, src.logical, src.real);
+          const logicalTarget = path.join(target, src.relative);
+          const realTarget = this.skillPath(target, c.skillsAccess, logicalTarget);
           const item = this.item(
             id,
             "skills",
-            src,
-            path.join(target, path.relative(source, src)),
+            src.real,
+            realTarget,
+            src.logical,
+            logicalTarget,
           );
           if (item) items.push(item);
         }
@@ -401,7 +467,11 @@ export class ConsoleService {
     return this.plan(id).view;
   }
   private preflight(i: PlanItem): void {
-    this.allowedTarget(i.agent, i.target);
+    this.allowedTarget(i.agent, i.target, i.targetLogical);
+    if (i.sourceLogical) {
+      if (!this.config.canonicalSkills) throw new Error("共享技能源授权已撤销");
+      this.skillPath(this.config.canonicalSkills, this.config.canonicalSkillsAccess, i.sourceLogical, i.source);
+    }
     if (hashFile(i.source) !== i.after || hashFile(i.target) !== i.before)
       throw new Error(`文件在预览后发生变化，已中止：${i.target}`);
   }
@@ -415,7 +485,7 @@ export class ConsoleService {
     for (const agent of new Set(plan.items.map((i) => i.agent))) {
       const files = plan.items
         .filter((i) => i.agent === agent && i.before !== null)
-        .map((i) => i.target);
+        .map((i) => ({ target: i.target, logicalTarget: i.targetLogical }));
       if (files.length) this.createBackup(agent, files, "同步前自动快照");
     }
     let done = 0;
@@ -445,15 +515,16 @@ export class ConsoleService {
   }
   private createBackup(
     agent: AgentId,
-    files: string[],
+    files: Array<string | { target: string; logicalTarget?: string }>,
     label: string,
   ): Manifest {
     if (!this.verifyAudit().valid)
       throw new Error("台账校验失败，已阻止备份操作");
-    const entries = files.map((target) => {
-      this.allowedTarget(agent, target);
+    const entries = files.map((file) => {
+      const { target, logicalTarget } = typeof file === "string" ? { target: file, logicalTarget: undefined } : file;
+      this.allowedTarget(agent, target, logicalTarget);
       const data = readText(target);
-      return { target, data, hash: digest(data) };
+      return { target, logicalTarget, data, hash: digest(data) };
     });
     if (
       entries.length > MAX_FILES ||
@@ -477,7 +548,7 @@ export class ConsoleService {
       const e = entries[i],
         file = `${i}.txt`;
       atomicWrite(path.join(folder, file), e.data);
-      manifest.entries.push({ target: e.target, file, hash: e.hash });
+      manifest.entries.push({ target: e.target, logicalTarget: e.logicalTarget, file, hash: e.hash });
     }
     atomicWrite(
       path.join(folder, "manifest.json"),
@@ -488,12 +559,13 @@ export class ConsoleService {
   }
   backup(id: AgentId): number {
     const c = this.settings(id),
-      files: string[] = [];
-    if (c.memory) files.push(c.memory);
-    if (c.skills) files.push(...textTree(c.skills).files);
+      files: Array<{ target: string; logicalTarget?: string }> = [];
+    if (c.memory) files.push({ target: c.memory });
+    if (c.skills) files.push(...scanSkills(c.skills).files.map(f=>({ target: f.real, logicalTarget: f.logical })));
     if (!files.length) throw new Error("请先选择并授权实际记忆文件或技能目录");
-    this.createBackup(id, [...new Set(files)], "手动快照");
-    return files.length;
+    const unique = [...new Map(files.map(f=>[pathKey(f.target),f])).values()];
+    this.createBackup(id, unique, "手动快照");
+    return unique.length;
   }
   private manifest(id: string): Manifest {
     if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("无效备份 ID");
@@ -525,11 +597,13 @@ export class ConsoleService {
         !/^\d+\.txt$/.test(e.file) ||
         typeof e.hash !== "string" ||
         !/^[a-f0-9]{64}$/.test(e.hash) ||
-        typeof e.target !== "string"
+        typeof e.target !== "string" ||
+        (e.logicalTarget !== undefined && typeof e.logicalTarget !== "string")
       )
         throw new Error("备份条目无效");
       const target = localPath(e.target),
         key = process.platform === "win32" ? target.toLowerCase() : target;
+      if (e.logicalTarget !== undefined) localPath(e.logicalTarget);
       if (files.has(e.file) || targets.has(key))
         throw new Error("备份条目重复");
       files.add(e.file);
@@ -564,7 +638,7 @@ export class ConsoleService {
     for (const e of m.entries) {
       const source = path.join(this.storage, "backups", id, e.file);
       if (hashFile(source) !== e.hash) throw new Error("备份内容校验失败");
-      const item = this.item(m.agent, "restore", source, e.target);
+      const item = this.item(m.agent, "restore", source, e.target, undefined, e.logicalTarget);
       if (item) items.push(item);
     }
     return this.remember(items, [

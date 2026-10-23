@@ -1015,7 +1015,7 @@ header {
   border: none;
   padding-bottom: 0;
 }
-.skill-row > div {
+.skill-row > div:first-child {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1572,6 +1572,16 @@ textarea::placeholder {
     font-size: 9px;
   }
 }
+.skill-links {
+  min-width: 0;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.skill-links summary { cursor: pointer; color: var(--muted); }
+.skill-link-list { max-height: 260px; overflow: auto; margin-top: 12px; }
+.skill-link-list > div { margin-bottom: 12px; }
+.skill-link-list .path { white-space: normal; overflow-wrap: anywhere; }
+.skill-links .error-text { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
