@@ -8,6 +8,9 @@ import { createAdapters } from "./adapters";
 import { ConsoleService } from "./service";
 import { Processes } from "./processes";
 import { RepositoryService } from "./repository-service";
+import { RewardsService } from "./rewards-service";
+import { WindowsRewardsBridge } from "./rewards-windows";
+import type { RewardId } from "../src/rewards-types";
 import type { RepositoryAutomation, RepositoryResolution } from "../src/repository-types";
 import { noLinks } from "./safety";
 import type { AgentId, PickKind, PathKind, SkillAccess } from "../src/shared";
@@ -26,6 +29,7 @@ let window: BrowserWindow;
 let service: ConsoleService;
 let processes: Processes;
 let repository: RepositoryService;
+let rewards: RewardsService;
 let busy = false;
 const validId = (value: unknown): AgentId => {
   if (typeof value !== "string") throw new Error("Agent 参数无效");
@@ -79,6 +83,37 @@ function handler(
   });
 }
 function register() {
+  const rewardId = (value: unknown): RewardId => rewards.definition(value).id;
+  handler("rewardsSnapshot", () => rewards.snapshot(), false);
+  handler("rewardsBind", async (value: unknown) => {
+    const id = rewardId(value), definition = rewards.definition(id);
+    if (definition.kind !== "ui") throw new Error("此平台没有已支持的免费领取流程");
+    const chosen = await dialog.showOpenDialog(window, { title: `选择 ${definition.name} 的领取客户端 EXE`, properties: ["openFile"], filters: [{name:"Windows 程序", extensions:["exe"]}] });
+    if (chosen.canceled || !chosen.filePaths[0]) return {message:"已取消绑定"};
+    const executable = chosen.filePaths[0];
+    if (!(await confirm("绑定积分领取客户端", `${definition.name}\n${executable}\n\n将核验并绑定此程序。后续只操作该 EXE 的唯一已打开窗口，不读取登录凭据。客户端升级后需重新绑定。Qoder 每日奖励必须选择新桌面客户端，不能选择 Qoder IDE。`))) return {message:"未绑定客户端"};
+    rewards.bind(id, executable); return {message:"已绑定客户端，请打开并登录后校准活动流程"};
+  });
+  handler("rewardsInspect", (id: unknown) => rewards.inspect(rewardId(id)));
+  handler("rewardsRecord", async (id: unknown, token: unknown, index: number, kind: "navigate"|"claim") => {
+    await rewards.record(rewardId(id), str(token), index, kind); return {message:kind === "navigate" ? "已记录并打开导航，请重新检查窗口" : "已记录领取按钮，尚未执行领取"};
+  });
+  handler("rewardsChecks", (id: unknown, token: unknown, indices: number[], successTexts: string[], resetHour: number) => {
+    rewards.checks(rewardId(id), str(token), indices, successTexts, resetHour); return {message:"活动识别条件已保存，请试领验证"};
+  });
+  handler("rewardsReset", (id: unknown) => { rewards.reset(rewardId(id)); return {message:"流程已清空，自动领取已关闭；未修改客户端"}; });
+  handler("rewardsRun", async (value: unknown) => {
+    const id = rewardId(value), provider = rewards.snapshot().providers.find(p => p.id === id)!;
+    if (!(await confirm("试领当前免费活动", `${provider.name}\n${provider.profile?.executable || "尚未绑定"}\n\n将依次打开已记录的导航，并点击一次已记录的免费领取按钮。仅平台明确显示成功才计为领取。若上次结果未知，请先在客户端核对；不会购买、邀请、发送任务或使用重置卡。`))) return {message:"已取消试领"};
+    return rewards.run(id);
+  });
+  handler("rewardsAutomation", async (value: unknown, enabled: boolean) => {
+    const id = rewardId(value), provider = rewards.snapshot().providers.find(p => p.id === id)!;
+    if (typeof enabled !== "boolean") throw new Error("自动领取参数无效");
+    if (enabled && !(await confirm("启用自动领取", `${provider.name}\n${provider.profile?.executable || "尚未绑定"}\n北京时间 ${provider.profile?.resetHour ?? provider.resetHour}:00 起的新窗口，每窗口最多记录一次成功。\n\n仅控制台与已登录客户端均打开、桌面解锁时执行；客户端需要停留在已校准流程能识别的页面。账号切换或活动变化后请重新校准。未知结果会暂停，不会反复提交。`))) return {message:"自动领取设置未更改"};
+    rewards.automation(id, enabled); return {message:enabled ? "自动领取已启用" : "自动领取已关闭"};
+  });
+  handler("rewardsRule", async (value: unknown) => { await shell.openExternal(rewards.definition(rewardId(value)).sourceUrl); return {message:"已打开官方规则"}; });
   handler("repositorySnapshot", () => repository.snapshot(), false);
   handler("repositoryChoose", async () => {
     const chosen = await dialog.showOpenDialog(window, { title: "选择独立的记忆与技能 Git 仓库目录", properties: ["openDirectory", "createDirectory"] });
@@ -313,6 +348,9 @@ else {
       );
       processes = new Processes(service);
       repository = new RepositoryService(service);
+      rewards = new RewardsService(service, new WindowsRewardsBridge(app.isPackaged
+        ? path.join(process.resourcesPath, "rewards", "RewardBridge.exe")
+        : path.join(app.getAppPath(), "native", "bin", "RewardBridge.exe")));
       session.defaultSession.setPermissionRequestHandler(
         (_wc, _permission, callback) => callback(false),
       );
@@ -345,14 +383,15 @@ else {
       const repositoryTimer = setInterval(() => {
         if (busy || !window || window.isDestroyed()) return;
         busy = true;
-        void repository.tick().catch(error => console.error("Repository automatic task failed:", String(error))).finally(() => { busy = false; });
+        void repository.tick().catch(error => console.error("Repository automatic task failed:", String(error)))
+          .then(() => rewards.tick()).catch(error => console.error("Rewards automatic task failed:", String(error))).finally(() => { busy = false; });
       }, 5000);
       app.once("before-quit", () => clearInterval(repositoryTimer));
       let closing = false;
       window.on("close", (event) => {
         if (busy) {
           event.preventDefault();
-          void dialog.showMessageBox(window, {type:"info",message:"本地操作尚未完成",detail:"请等待当前同步、备份或 Git 保存完成后再关闭控制台。",buttons:["返回控制台"],defaultId:0,noLink:true});
+          void dialog.showMessageBox(window, {type:"info",message:"本地操作尚未完成",detail:"请等待当前同步、备份、积分领取或 Git 保存完成后再关闭控制台。",buttons:["返回控制台"],defaultId:0,noLink:true});
           return;
         }
         if (closing || !processes.active().length) return;

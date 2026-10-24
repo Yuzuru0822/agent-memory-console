@@ -118,7 +118,7 @@ export function createAdapters(home: string, local: string, environment: NodeJS.
       glyph: "D",
       integration: "candidate",
       mode: "desktop",
-      note: "截图中的 .dsh 是候选路径，不等同于官方 DeepSeek 集成。未实现 DSH CLI 协议；仅可绑定独立桌面 EXE。",
+      note: "DeepSeek 已提供官方 Harness；本控制台的 .dsh 仍仅是待核验候选路径。未实现 Harness CLI 协议；仅可绑定独立桌面 EXE。",
       memory: [h(".dsh", "AGENTS.md")],
       skills: [h(".dsh", "skills")],
       executables: [],

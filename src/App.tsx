@@ -21,6 +21,7 @@ import {
   Fingerprint,
   Folder,
   FolderOpen,
+  Gift,
   GitCompareArrows,
   History,
   Layers3,
@@ -42,12 +43,14 @@ import {
 } from "lucide-react";
 import type { AgentId, AgentView, PathKind, Plan, Snapshot, SkillsInfo } from "./shared";
 import RepositoryPanel from "./RepositoryPanel";
+import RewardsPanel from "./RewardsPanel";
 
 const api = window.consoleApi;
-type Tab = "overview" | "repository" | "sync" | "backups" | "activity" | "integrations";
+type Tab = "overview" | "repository" | "rewards" | "sync" | "backups" | "activity" | "integrations";
 const nav = [
   { id: "overview", name: "监控总览", icon: LayoutDashboard },
   { id: "repository", name: "统一仓库", icon: Database },
+  { id: "rewards", name: "积分福利", icon: Gift },
   { id: "sync", name: "记忆与技能", icon: Layers3 },
   { id: "backups", name: "备份快照", icon: History },
   { id: "activity", name: "活动台账", icon: Activity },
@@ -818,6 +821,7 @@ export default function App() {
               </>
             )}
             {tab === "repository" && <RepositoryPanel onChange={refresh} />}
+            {tab === "rewards" && <RewardsPanel />}
             {tab === "sync" && (
               <>
                 <div className="page-heading">
@@ -1065,7 +1069,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.2.2</b>
+                AGENT MEMORY CONSOLE <b>v0.3.0</b>
               </span>
             </footer>
           </>

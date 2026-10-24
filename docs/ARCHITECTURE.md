@@ -1,6 +1,6 @@
 # 架构与扩展
 
-工程将界面、受限桌面接口和本地服务分开。React 只展示数据及发起固定操作；文件访问、授权检查、备份和子进程均位于 Electron 主进程。
+工程将界面、受限桌面接口和本地服务分开。React 只展示数据及发起固定操作；文件访问、授权检查、备份、子进程及积分流程编排均位于 Electron 主进程。v0.3.0 的 Windows UI Automation 由独立原生桥接进程执行，只接收固定 JSON 请求。
 
 ## 文件职责
 
@@ -9,6 +9,7 @@
 | `src/App.tsx` | 总览、同步、备份、活动与集成页面；详情面板和差异预览 |
 | `src/RepositoryPanel.tsx` / `src/repository.css` | 独立仓库设置、纳管成员、多文件记忆、三方冲突处理、技能连接与自动化设置 |
 | `src/repository-types.ts` | 仓库视图、同步计划、冲突选择与固定 IPC 契约 |
+| `src/RewardsPanel.tsx` / `src/rewards-types.ts` | 积分福利页面、平台与状态类型、校准控件和固定 IPC 契约 |
 | `src/shared.ts` | Agent ID、视图、配置、同步计划及 IPC 接口类型 |
 | `electron/adapters.ts` | 七个内置适配器的显示信息、候选路径和能力标签 |
 | `electron/preload.ts` | 通过 `contextBridge` 暴露固定 `consoleApi`，不暴露 Node 或原始 IPC |
@@ -25,6 +26,12 @@
 | `electron/merge.ts` | 基于共同版本的逐行三方合并；保留换行形式，冲突不写入冲突标记 |
 | `electron/junction-migration.ts` | 完整技能包及独立内层 Git 目录导入、冲突预检、原入口备份、junction 创建、失败回滚及解除连接 |
 | `electron/git-migration.ts` | 只读检查内层 Git 是否可独立搬迁；拒绝外置元数据、对象依赖及路径配置，不加载 include 或执行 hooks |
+| `electron/rewards-adapters.ts` | 九个平台的活动分类、官方依据和默认领取窗口；与文件适配器分开 |
+| `electron/rewards-service.ts` | 独立 EXE 授权、校准、试领、成功判定、窗口去重、未知结果暂停及调度 |
+| `electron/rewards-windows.ts` | 固定原生桥接路径、请求/响应校验、15 秒超时与 1 MiB 输出限制 |
+| `native/RewardBridge.cs` | 检查交互桌面、精确匹配 EXE 与可见窗口、受限 UIA 枚举及唯一控件调用 |
+| `scripts/build-rewards.cjs` | 使用 Windows 系统 .NET Framework 编译桥接组件，不执行界面操作 |
+| `tests/rewards-desktop.cjs` | 在隔离 Electron 应用中使用模拟桥接测试 React、IPC 和积分流程 |
 
 界面没有本地权限时会显示桌面启动提示。主进程只接受来自预期窗口主 frame 和预期页面 URL 的 IPC。会改变状态的 IPC 操作串行处理；刷新快照可以并行读取。
 
@@ -79,11 +86,27 @@ v0.2.1 允许显式迁移携带技能根目录及子目录中的普通 `.git` �
 
 快照保存实际目标及原始 `logicalTarget`。恢复读取快照清单、检查备份内容哈希，并使用当前授权重新解析逻辑目标，再走相同的预览和写入流程。撤销、更换授权或链接改指后，旧快照不能绕过当前授权写入旧位置。
 
+## 积分福利
+
+v0.3.0 的奖励适配器与七个 Agent 的文件/启动适配器相互独立：九个平台条目中，Qoder 国际版、Qoder CN、TRAE CN 和 WorkBuddy 提供可校准 UI 流程；千问办公、智谱 ZCode、Claude Code、TRAE 国际版和 DeepSeek Harness 仅展示自动发放、需人工处理或尚未接入的说明。增加文件适配器不会自动获得领取权限。活动规则与证据见 [积分活动说明](REWARDS.md)。
+
+用户通过原生文件选择和确认绑定领取客户端，保存 EXE 路径与 SHA-256；既有启动授权不沿用。每次流程重新校验文件摘要，客户端升级后要求重新绑定。用户自行登录并打开窗口；服务不管理登录、不读取凭据，也不自动识别切换后的账号。地区配置独立，平台和时间窗口去重不能替代账号身份校验。
+
+`inspect` 生成短期观察令牌，供 UI 从实际返回的控件中选择。记录导航会立即调用该控件；记录领取控件只保存配置。领取配置还需要窗口标题、活动上下文、明确成功文案和每日重置时间。校准和执行占用操作锁，观察过期、程序或配置变化后需重新检查。只有手动试领后在同一活动上下文中观察到明确成功，才能标记流程已验证并启用自动；仅看到“已领取”不构成首次试领成功。
+
+运行时重新检查窗口，按保存的导航到达活动页，确认上下文和唯一领取控件。提交前先持久化“未知”标记，再调用桥接；桥接在同一目标窗口内重新检查上下文后才执行。提交后重复检查明确结果；超时、上下文丢失或无法确认成功时保留未知并暂停自动执行，重启也不自动重试。跨日切的提交按实际领取窗口记录；提交和成功核验跨越窗口时保持未知，避免错误去重。用户需先核对客户端结果，再重新校准。
+
+主进程生命周期定时器串行检查统一仓库与积分任务；积分服务每轮至多处理一个平台，依据其 UTC+8 领取窗口判断是否到期。自动流程默认关闭，开启需已验证的校准和原生确认。锁屏等提交前失败只推迟后续检查；已经提交后的未知结果关闭自动并要求人工核对。它不是 Windows 后台服务，关闭控制台即停止调度。
+
+Node 只启动固定路径的 `RewardBridge.exe`，通过 stdin/stdout 传输单个 JSON 请求/响应，不传代码、脚本或命令。开发路径为 `native/bin/RewardBridge.exe`，打包路径为 `resources/rewards/RewardBridge.exe`。桥接只支持 `inspect` 与 `invoke`：精确核验 EXE、可见且非最小化的唯一顶级窗口，在该窗口内遍历控件；调用前复核桌面、进程、窗口身份、唯一 selector 与活动文本。详细限制见 [安全边界](SECURITY.md)。
+
 ## 数据生命周期
 
 配置、台账、共同版本及快照位于 `userData/console-data`。仓库记忆与技能的工作文件位于用户明确选择的独立目录。自动清理是可选设置，默认保留 30 天且至少 20 份仓库备份，仅清理受控备份与临时文件，不传播文件删除，也不清理技能迁移原目录或 Git 历史。兼容模式界面最多展示最近 100 份快照和 100 条活动。台账采用含序号、时间、上条哈希和本条哈希的 JSONL 记录；可检测部分意外损坏，没有外部签名或可信锚点。
 
-同步计划、当前子进程对象与 CLI 输出只保留在内存。关闭应用时若仍有所属进程，会要求用户返回或放弃追踪；应用不会自动杀死这些进程。
+`rewards.json` 保存独立的积分配置、选择的窗口和控件文案、领取窗口状态及结果日志；读取上限 2 MiB，结果日志保留最近 200 条、界面显示最近 100 条。积分授权、自动化与结果事件另写入现有活动台账。配置为本机明文，不保存登录令牌；选定的可见文案仍可能含个人信息。领取状态不是厂商签名收据，也不能证明实际余额。
+
+同步计划、积分窗口观察、当前子进程对象与 CLI 输出只保留在内存。关闭应用时若仍有所属进程，会要求用户返回或放弃追踪；应用不会自动杀死这些进程。
 
 ## 添加适配器
 
@@ -96,8 +119,14 @@ v0.2.1 允许显式迁移携带技能根目录及子目录中的普通 `.git` �
 
 适配器不得自行获得写权限、引入 shell 字符串、默认执行技能脚本或宣称未验证的厂商协议支持。需要新的登录、任务派发等能力时，应新增有明确输入类型和授权边界的主进程 API。
 
+积分平台另在 `rewards-adapters.ts` 定义证据来源、活动分类与时间窗口。未确认可主动领取的权益应保持说明模式，不能把登录赠送、月度配额、兑换或付费操作改成领取按钮；新增 UI 流程也必须经过用户校准、成功试领及相关安全测试。
+
 ## 验证与交付
 
-先运行 `npm test` 和 `npm run build`，再对构建产物运行 `npm run test:desktop`。`npm run pack` 与 `npm run dist` 使用 electron-builder 输出 Windows x64 解包目录及便携 EXE；构建直接使用 `node_modules/electron/dist` 的已安装运行时。解包成品使用 `node tests/packaged.cjs`，便携单文件使用 `node tests/portable.cjs` 验证启动。依赖由 `package-lock.json` 锁定，使用 `npm ci` 安装，Electron 当前固定为 `45.0.0`。写入测试使用隔离数据，不连接真实厂商账户来模拟业务结果。覆盖、成品只读发现范围与结果见 [测试说明](TESTING.md)。
+先运行 `npm run build` 和 `npm test`，再对构建产物运行 `npm run test:desktop`、`node tests/repository-desktop.cjs` 与 `node tests/rewards-desktop.cjs`。积分桌面测试使用真实 Electron/IPC/React 和模拟的 Windows 桥接，不调用真实客户端；原生协议和纯数据筛选测试也不等于实际领取验证。真实客户端控件兼容性、账号资格和到账仍需逐项校准试领，不能从模拟测试推断成功。
+
+开发和生产构建都运行 `build:rewards`，使用系统 `%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` 及其 .NET Framework/WPF 引用；不下载编译器或执行 UIA。缺少系统组件时 Windows 构建失败，非 Windows 构建明确跳过桥接。完整要求见 [运行说明](../README.md)。
+
+`npm run pack` 与 `npm run dist` 使用 electron-builder 输出 Windows x64 解包目录及 v0.3.0 便携 EXE；构建直接使用 `node_modules/electron/dist` 的已安装运行时，并将原生桥接复制到 `resources/rewards/`。解包成品使用 `node tests/packaged.cjs`，便携单文件使用 `node tests/portable.cjs` 验证启动。依赖由 `package-lock.json` 锁定，使用 `npm ci` 安装，Electron 当前固定为 `45.0.0`。写入测试使用隔离数据；覆盖、成品只读发现范围与结果见 [测试说明](TESTING.md)。
 
 开发模式提供 `CONSOLE_TEST_DATA` 和 `CONSOLE_TEST_HOME` 环境变量供测试隔离数据与用户目录；打包应用不接受这两项覆盖。请勿把测试变量配置在日常启动环境中。

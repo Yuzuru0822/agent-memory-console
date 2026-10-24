@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ConsoleApi } from "../src/shared";
 const api: ConsoleApi = {
+  rewardsSnapshot: () => ipcRenderer.invoke("console:rewardsSnapshot"),
+  rewardsBind: id => ipcRenderer.invoke("console:rewardsBind", id),
+  rewardsInspect: id => ipcRenderer.invoke("console:rewardsInspect", id),
+  rewardsRecord: (id, token, index, kind) => ipcRenderer.invoke("console:rewardsRecord", id, token, index, kind),
+  rewardsChecks: (id, token, indices, successTexts, resetHour) => ipcRenderer.invoke("console:rewardsChecks", id, token, indices, successTexts, resetHour),
+  rewardsReset: id => ipcRenderer.invoke("console:rewardsReset", id),
+  rewardsRun: id => ipcRenderer.invoke("console:rewardsRun", id),
+  rewardsAutomation: (id, enabled) => ipcRenderer.invoke("console:rewardsAutomation", id, enabled),
+  rewardsRule: id => ipcRenderer.invoke("console:rewardsRule", id),
   repositorySnapshot: () => ipcRenderer.invoke("console:repositorySnapshot"),
   repositoryChoose: () => ipcRenderer.invoke("console:repositoryChoose"),
   repositoryReveal: () => ipcRenderer.invoke("console:repositoryReveal"),

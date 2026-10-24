@@ -1,0 +1,32 @@
+import type { RewardDefinition } from "../src/rewards-types";
+
+/** Official rules checked 2026-10-24. UI availability is verified separately. */
+export const rewardDefinitions: RewardDefinition[] = [
+  { id: "qoder", agent: "qoder", name: "Qoder 国际版", kind: "ui", resetHour: 10,
+    description: "个人用户每日主动领取 100 Credits，每笔 30 天有效。仅新 Qoder 桌面端的用量面板 → 礼物入口可领；Qoder IDE 不是此活动的领取客户端。需绑定正确桌面程序并校准流程。",
+    sourceUrl: "https://docs.qoder.com/events/100credits", scheduleNote: "官方窗口：北京时间每日 10:00 更新。" },
+  { id: "qoder-cn", agent: "qoder", name: "Qoder CN", kind: "ui", resetHour: 10,
+    description: "CN 个人版每日 100 Credits，须在 CN 桌面端领取。与国际版使用独立登录和活动，不复用账号或 IDE 启动入口。",
+    sourceUrl: "https://docs.qoder.cn/events/100credits", scheduleNote: "官方窗口：北京时间每日 10:00 更新。" },
+  { id: "trae", agent: "trae", name: "TRAE CN", kind: "ui", resetHour: 0,
+    description: "头像 → 签到。官方当前说明免费用户每日 100、会员 200 积分，31 个自然日有效；每月登录赠送另算。以账号当前活动页为准。",
+    sourceUrl: "https://docs.trae.cn/ide_plans-and-billing", scheduleNote: "官方未明确日切时间；默认北京时间 00:00，可按客户端实际窗口调整。" },
+  { id: "trae-global", agent: "trae", name: "TRAE 国际版", kind: "unknown", resetHour: 0,
+    description: "尚未核实国际版当前可领取的签到规则，不能直接套用 CN 的积分与入口。暂不自动操作。",
+    sourceUrl: "https://docs.trae.ai/ide/plans-and-billing", scheduleNote: "需核实当前官方活动。" },
+  { id: "workbuddy", agent: "workbuddy", name: "WorkBuddy", kind: "ui", resetHour: 0,
+    description: "官方入口：头像 → Buddy 加油站。当前活动金额、资格和日期须以客户端为准；仅校准免费签到或领取按钮。月度赠送、付费兑换、邀请任务不自动执行。",
+    sourceUrl: "https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Setting", scheduleNote: "官方未公布统一日领窗口；校准时按当前活动设置，自动执行前先试领验证。" },
+  { id: "qwen", agent: "qwen", name: "千问办公", kind: "automatic", resetHour: 0,
+    description: "中国站个人空间当前每日登录赠送积分，金额随套餐变化、当日有效。属于登录权益；打开网页或启动程序不代表到账，本控制台不代为登录或伪造领取记录。",
+    sourceUrl: "https://qwenwork.cn/pricing?audience=individual&billing=monthly", scheduleNote: "登录赠送，无已验证的主动领取接口。" },
+  { id: "zcode", agent: "zcode", name: "智谱 ZCode", kind: "automatic", resetHour: 0,
+    description: "BigModel 新用户首次 5 天试用和符合条件的重置卡由系统发放。点击重置会消耗卡片，不属于领取，不自动执行。历史限时礼包需在客户端核实。",
+    sourceUrl: "https://zcode.z.ai/cn/docs/usage-stats", scheduleNote: "条件发放；不自动使用或消耗权益。" },
+  { id: "claude", agent: "claude", name: "Claude Code", kind: "manual", resetHour: 0,
+    description: "部分 Max/Team 用户可在官方账单页关联 Console 组织以获得月度 API 赠额。这涉及组织选择，且不是每日签到或交互式 Claude Code 积分。暂不自动配置。",
+    sourceUrl: "https://support.claude.com/en/articles/17154008-monthly-api-credits-for-max-and-team-plans", scheduleNote: "需首次人工关联，之后按账期发放。" },
+  { id: "deepseek", agent: "deepseek", name: "DeepSeek Harness", kind: "unknown", resetHour: 0,
+    description: "尚未找到官方公开的日签领取接口。Harness 的赠金通知确认仅标记已发放赠金为已读，不会发放积分，因此不将其作为领取。",
+    sourceUrl: "https://www.deepseek.com/harness/", scheduleNote: "未验证可主动领取的活动。" },
+];

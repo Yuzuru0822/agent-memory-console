@@ -1,15 +1,16 @@
 {
   "name": "agent-memory-console",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "Local Windows agent memory and skills console",
   "author": "Agent Console",
   "license": "MIT",
   "main": "dist-electron/electron/main.js",
   "scripts": {
-    "dev": "npm run build:main && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CONSOLE_DEV=1 electron .\"",
+    "dev": "npm run build:main && npm run build:rewards && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CONSOLE_DEV=1 electron .\"",
     "build:main": "tsc -p tsconfig.electron.json",
-    "build": "tsc --noEmit -p tsconfig.json && npm run build:main && vite build",
+    "build": "tsc --noEmit -p tsconfig.json && npm run build:main && npm run build:rewards && vite build",
+    "build:rewards": "node scripts/build-rewards.cjs",
     "start": "electron .",
     "test": "tsx --test tests/*.test.ts",
     "test:desktop": "node tests/desktop.cjs",
@@ -50,6 +51,7 @@
       "package.json"
     ],
     "asar": true,
+    "extraResources": [{ "from": "native/bin/RewardBridge.exe", "to": "rewards/RewardBridge.exe" }],
     "electronDist": "node_modules/electron/dist",
     "win": {
       "target": [

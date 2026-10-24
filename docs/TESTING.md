@@ -2,7 +2,28 @@
 
 本地服务测试、真实 Electron 窗口测试和厂商集成验证分别记录。测试中的记忆、技能、脚本和 PE 字节均为人工夹具，不来自真实 Agent，也不执行技能脚本。
 
-## v0.2.2 本轮验证
+## v0.3.0 本轮验证
+
+本轮新增“积分福利”。所有厂商观察和领取动作均使用隔离夹具；**未在真实账户领取积分，也未验证实际到账**。九个平台条目中的四条 UI 流程需要在真实客户端中校准与试领。
+
+| 检查 | 当前状态 | 范围 |
+| --- | --- | --- |
+| `npm test` | 219 通过、2 跳过、0 失败（共 221 项） | 包含 28 项积分服务及 11 项 Windows 桥接回归；原有文件符号链接权限用例跳过，目录 junction 实际通过 |
+| 积分服务 | 28/28 通过 | 平台分类、校准令牌、危险控件/余额上下文拒绝、明确成功、日切去重、跨界未知、并发锁、未知结果重启暂停、EXE 变化与台账损坏 |
+| Windows 桥接 | 11/11 通过 | 固定 EXE、JSON stdin、无 shell、输入/输出限额、超时、上下文参数；实际原生组件拒绝无效协议及纯投影隐藏元素过滤，不访问真实 UIA 窗口 |
+| `npm run build` | 已通过 | TypeScript、Vite、系统 .NET Framework 编译原生组件，版本 0.3.0 |
+| `npm run test:desktop` | 已通过 | 七个 Agent、既有同步/备份/授权、npm 与 Qoder、沙箱及布局回归 |
+| `node tests/rewards-desktop.cjs` | 64 项断言通过 | 真实 Electron/preload/IPC/React + 模拟厂商桥；九类条目、绑定取消/确认、导航/领取记录、试领/自动确认、去重、未知暂停、持久化及窄窗口 |
+| Windows 解包成品 | 已通过 | 0.3.0 启动、隔离配置、沙箱、七个 Agent、九个福利条目、四条可校准流程、初始自动关闭、原生组件资源路径及 PE 格式 |
+| 原生组件交付 | 已通过 | 成品 helper 可启动并在访问桌面 API 前拒绝无效协议；与本地编译组件 SHA-256 一致 |
+| 统一仓库桌面回归 | 14 场景通过 | 本地 Git、多文件记忆、双向冲突、完整技能/junction 导入解除、保留删除内容、自动任务与布局 |
+| ASAR 内 Git 与资源一致性 | 已通过 | 成品内 Git 初始化/提交/重启历史、内层 Git 保留；24 个 ASAR 编译文件与最终构建字节一致，版本 0.3.0 |
+| Windows 便携成品 | 已通过 | 单文件自动解压与启动、隔离配置、九个福利条目、原生组件随包解压、默认无领取授权与界面导航 |
+| 真实厂商领取 | 未执行 | 桌面锁定后停止真实客户端检查；仍需解锁后逐项验证控件兼容性、账号资格、成功文本和到账 |
+
+已查看积分页面截图，深色布局及紧凑窗口正常。自动领取依赖控制台运行、Windows 解锁、已绑定客户端可见且已登录；未验证的流程不能启用自动。详细规则及未集成活动见 [积分活动说明](REWARDS.md)。
+
+## v0.2.2 历史验证
 
 本轮接入第七个 Agent Qoder，已有六个 Agent 配置保持兼容。测试使用隔离夹具，不修改真实 Qoder 的技能或记忆。
 
@@ -71,13 +92,14 @@ node tests/process-smoke.cjs
 node tests/npm-process-smoke.cjs
 npm run test:desktop
 node tests/repository-desktop.cjs
-npm run dist -- --config.directories.output=release-0.2.2
-node tests/packaged.cjs "release-0.2.2/win-unpacked/Agent Memory Console.exe"
-node tests/repository-packaged.cjs "release-0.2.2/win-unpacked/Agent Memory Console.exe"
-node tests/portable.cjs "release-0.2.2/Agent-Memory-Console-0.2.2-win-x64.exe"
+node tests/rewards-desktop.cjs
+npm run dist -- --config.directories.output=release-0.3.0
+node tests/packaged.cjs "release-0.3.0/win-unpacked/Agent Memory Console.exe"
+node tests/repository-packaged.cjs "release-0.3.0/win-unpacked/Agent Memory Console.exe"
+node tests/portable.cjs "release-0.3.0/Agent-Memory-Console-0.3.0-win-x64.exe"
 ```
 
-需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.2.2`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。以上命令是本版验证入口，是否已执行以顶部结果表为准。
+需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.3.0`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。以上命令是本版验证入口，是否已执行以顶部结果表为准。
 
 桌面测试需要完整 Electron 运行时和可用图形桌面，不能用单纯浏览器预览替代。electron-builder 使用已安装的 `node_modules/electron/dist`。
 

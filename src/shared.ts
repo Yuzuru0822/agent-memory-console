@@ -1,6 +1,7 @@
 import type { ClaudeNpmInstallation } from "../electron/claude-npm";
 import type { SkillLink } from "../electron/skill-paths";
 import type { RepositoryApi, RepositoryConfig } from "./repository-types";
+import type { RewardsApi } from "./rewards-types";
 
 export interface SkillAccess {
   root: string;
@@ -126,7 +127,7 @@ export interface Plan {
 export interface Result {
   message: string;
 }
-export interface ConsoleApi extends RepositoryApi {
+export interface ConsoleApi extends RepositoryApi, RewardsApi {
   snapshot(): Promise<Snapshot>;
   pick(id: AgentId | null, kind: PickKind): Promise<Result>;
   approveNpm(): Promise<Result>;

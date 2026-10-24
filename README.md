@@ -1,6 +1,6 @@
 # Agent Memory Console
 
-用于 Windows 的本地 Agent 管理控制台，采用 Electron、React 和 TypeScript。深色界面提供七个 Agent 卡片、独立 Git 记忆与技能仓库、双向合并、定时同步、技能 junction 连接、备份与活动日志。原有单文件共享源作为兼容模式保留。
+用于 Windows 的本地 Agent 管理控制台，采用 Electron、React 和 TypeScript。深色界面提供七个 Agent 卡片、独立 Git 记忆与技能仓库、双向合并、定时同步、技能 junction 连接、备份与活动日志。v0.3.0 新增“积分福利”，提供四条可校准的 Windows UI 领取流程及五条自动发放权益或尚未接入流程的说明。原有单文件共享源作为兼容模式保留。
 
 这是可运行的本地文件与进程管理工程。Claude Code CLI 按官方文档适配用户级记忆、技能路径及单次任务；v0.2.2 新增 Qoder 的用户技能、CLI 静态指令候选和 IDE EXE 启动，未接入 Qoder CLI 任务或 IDE 自动记忆。WorkBuddy、TRAE、DeepSeek Harness、智谱 Zcode、千问 Work 使用候选路径或手动绑定，尚未验证厂商协议兼容性。界面不会把文件发现结果显示成登录、额度或会话状态。完整范围见 [集成说明](docs/INTEGRATIONS.md)。
 
@@ -8,11 +8,11 @@
 
 ## 运行
 
-便携单文件版可直接双击 `Agent-Memory-Console-0.2.2-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.2.2-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
+便携单文件版可直接双击 `Agent-Memory-Console-0.3.0-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.3.0-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
 
-已取得解包版时，无需安装 Node.js：保留 `win-unpacked` 整个目录及其中所有资源，双击目录内的 `Agent Memory Console.exe`。不能只复制这一个 EXE，或直接在压缩包预览窗口内运行它。工程中的对应位置为 `release/win-unpacked/`。
+已取得解包版时，无需安装 Node.js：保留 `win-unpacked` 整个目录及其中所有资源，双击目录内的 `Agent Memory Console.exe`。不能只复制这一个 EXE，或直接在压缩包预览窗口内运行它。积分福利还依赖随包的 `resources/rewards/RewardBridge.exe` 与 Windows .NET Framework 组件，不能删除这个资源目录。工程中的对应位置为 `release/win-unpacked/`。
 
-本版建议将成品输出到 `release-0.2.2/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.2.2/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
+本版建议将成品输出到 `release-0.3.0/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.3.0/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
 
 从源码运行或重新打包时，按以下步骤操作。
 
@@ -23,7 +23,9 @@ npm ci
 npm run dev
 ```
 
-开发模式会编译 Electron 主进程，在 `127.0.0.1:5173` 启动界面并打开桌面窗口。不要只用浏览器打开开发地址；浏览器没有桌面文件和进程接口。修改 `electron/` 后需重新启动开发命令。
+开发模式会编译 Electron 主进程和原生积分桥接组件，在 `127.0.0.1:5173` 启动界面并打开桌面窗口。不要只用浏览器打开开发地址；浏览器没有桌面文件、进程和 Windows UI Automation 接口。修改 `electron/` 或 `native/RewardBridge.cs` 后需重新启动开发命令。
+
+`npm run dev` 和 `npm run build` 均运行 `npm run build:rewards`。它使用系统已有的 `%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`，以及同目录的 `System.dll`、`System.Core.dll`、`System.Web.Extensions.dll` 和 `WPF/` 下的 `WindowsBase.dll`、`UIAutomationClient.dll`、`UIAutomationTypes.dll`，生成 `native/bin/RewardBridge.exe`。无需为此另外下载 .NET SDK 或编译器；系统缺少上述 .NET Framework 组件时构建会失败，需先修复系统组件。构建不操作任何客户端界面。非 Windows 环境会明确跳过此组件，不能据此认为 Windows 积分功能已构建或验证。
 
 若 PowerShell 的脚本策略阻止 `npm.ps1`，使用同名命令 `npm.cmd`，例如 `npm.cmd ci`；无需修改系统执行策略。
 
@@ -118,15 +120,36 @@ npm 自动发现检查环境中的 npm prefix、`%APPDATA%\npm`、nvm 路径和�
 
 `claude.cmd` 仅用于定位受支持的 npm 包，不读取或执行脚本正文。不执行任意 `.cmd`、`.bat`、PowerShell 脚本、快捷方式或命令字符串。除 Claude 外的六个适配器仍只接受 EXE。控制台只追踪自己启动的直接子进程。“停止所属进程”不会结束外部已运行程序或整个进程树；桌面程序启动器退出后，独立运行的应用状态可能未知。关闭控制台后也不能恢复此前的进程追踪。
 
+## 积分福利（v0.3.0）
+
+七个 Agent 对应九个平台条目，地区版本各自保存配置：
+
+| 范围 | 当前能力 |
+| --- | --- |
+| Qoder 国际版、Qoder CN、TRAE CN、WorkBuddy | 四条可校准的客户端 UI 领取流程；先成功试领，再允许自动执行 |
+| 千问办公、智谱 ZCode | 介绍系统或条件赠送权益，不代替登录、不消耗重置卡或兑换已有权益 |
+| Claude Code | 介绍需人工关联的权益，不代选组织或修改账单设置 |
+| TRAE 国际版、DeepSeek Harness | 尚未核实可执行的主动领取流程，不自动点击 |
+
+这些是流程能力，**尚未在真实登录账号上完成领取和到账验证**。当前活动资格、金额和界面以客户端为准，官方来源与活动边界见 [积分活动说明](docs/REWARDS.md)。Qoder 每日活动要求对应地区的**新 Qoder 桌面端**，不能把 Qoder IDE 或 CLI 启动器当成领取客户端。
+
+1. 自行打开正确的 Windows 客户端并登录，在“积分福利”中单独绑定其 EXE。文件管理或程序启动的既有授权不会自动授权领取。
+2. 检查可见、非最小化的窗口，按需要记录导航控件。**记录导航会立即执行该导航；记录领取按钮只保存选择，不会点击领取。**
+3. 在活动页选择明确的领取按钮、活动上下文和成功文案，核对每日重置时间。不要把购买、充值、重置或邀请按钮作为免费领取入口。
+4. 确认“试领”，等待在同一活动上下文中观察到明确成功。仅看到“已领取”不能验证首次领取流程；成功试领后才能开启自动执行。
+
+自动执行只在控制台运行、客户端窗口可用且桌面未锁定时工作；关闭应用后停止。锁屏或无法唯一定位窗口/控件时拒绝操作。领取提交后未能确认结果会保存为“未知”并暂停自动执行，重启也不会静默重试；需先到客户端核对，再重新校准。EXE 更新需重新绑定；切换账号也应重新校准，控制台不识别账号身份，去重依据是平台和领取窗口。
+
 ## 检查与打包
 
 ```powershell
-npm test
 npm run build
+npm test
 node tests/process-smoke.cjs
 node tests/npm-process-smoke.cjs
 npm run test:desktop
 node tests/repository-desktop.cjs
+node tests/rewards-desktop.cjs
 npm run pack
 node tests/packaged.cjs
 node tests/repository-packaged.cjs "release/win-unpacked/Agent Memory Console.exe"
@@ -137,18 +160,20 @@ node tests/portable.cjs
 | 命令 | 用途 |
 | --- | --- |
 | `npm test` | 执行本地服务和安全边界测试 |
-| `npm run build` | 类型检查并构建界面、主进程和 preload |
+| `npm run build` | 类型检查并构建界面、主进程、preload 和 Windows 原生积分桥接组件 |
+| `npm run build:rewards` | 使用系统 .NET Framework 编译 `native/bin/RewardBridge.exe`；不执行 UI 操作 |
 | `node tests/process-smoke.cjs` | 使用无害 Node.exe 替身验证真实子进程启动、输出、退出和仅停止所属进程；不启动厂商 Agent |
 | `node tests/npm-process-smoke.cjs` | 使用 Node.js 与合成 cli.js 验证 npm 启动、固定参数、原样 stdin 与启动钩子环境清理 |
 | `npm run test:desktop` | 对构建后的 Electron 应用做桌面冒烟验证；需可用的图形桌面 |
 | `node tests/repository-desktop.cjs` | 隔离夹具验证统一仓库、冲突处理、技能 junction 迁移与解除、自动化设置和窄窗口布局 |
+| `node tests/rewards-desktop.cjs` | 在真实 Electron/IPC/React 中使用模拟桥接验证积分配置与领取状态流程；不操作真实厂商客户端 |
 | `npm run pack` | 构建 Windows x64 解包版，输出至 `release/win-unpacked/` |
 | `node tests/packaged.cjs` | 启动上述解包成品并检查打包状态、沙箱、原生接口和页面切换；使用独立测试配置目录 |
 | `node tests/repository-packaged.cjs "成品 EXE 路径"` | 检查 ASAR 内嵌 Git 初始化、文本和二进制提交、重启后的历史及版本读取；使用独立仓库，不授权 Agent |
-| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.2.2-win-x64.exe` |
+| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.3.0-win-x64.exe` |
 | `node tests/portable.cjs` | 启动便携单文件成品并检查自动解压、隔离配置、原生接口和页面切换 |
 
-打包后的应用携带 Electron，用户运行时不需要 Node.js。便携版不等于数据随 EXE 存放：数据仍写入 Windows 用户数据目录。此工程没有配置代码签名、自动更新或安装器；Windows 可能对未签名程序显示提示。项目测试不代表已完成七家厂商客户端的真实账户端到端测试。
+打包后的应用携带 Electron 和 `resources/rewards/RewardBridge.exe`，用户运行时不需要 Node.js；积分桥接使用 Windows 的 .NET Framework 运行环境。源码直接运行时则需要完整的 `native/bin/RewardBridge.exe` 构建产物。便携版不等于数据随 EXE 存放：数据仍写入 Windows 用户数据目录。此工程没有配置代码签名、自动更新或安装器；Windows 可能对未签名程序显示提示。项目测试不代表已完成七家厂商客户端的真实账户端到端测试。
 
 依赖中 Electron 固定为 `45.0.0`；构建配置的 `electronDist` 指向 `node_modules/electron/dist`，直接使用安装好的 Electron 运行时。因此打包前须完成 `npm ci` 和 Electron 运行时下载，不能仅保留 Electron 的 JavaScript 包或缺失其 `dist` 目录。
 
@@ -162,13 +187,14 @@ node tests/portable.cjs
 console-data/
   config.json                 授权路径、共享源、统一仓库与自动化设置
   activity.jsonl              操作台账
+  rewards.json                积分平台配置、校准选择、领取窗口状态与结果日志
   backups/<快照 ID>/
     manifest.json             原逻辑路径、实际目标和内容校验值
     0.txt, 1.txt, ...          备份的原始文本字节
   repository-data/<仓库标识>/  统一仓库的同步状态、共同版本、备份和连接回执
 ```
 
-控制台没有云端同步或遥测实现。配置、日志、备份为本机明文；应按原始记忆文件的敏感程度保护。日志含路径和操作结果，不保存任务正文；CLI 输出仅保留在当前进程内存，最多 32,000 字符。第三方 Agent 自身的联网及日志行为由其自身决定。
+控制台没有云端同步或遥测实现。配置、日志、备份为本机明文；应按原始记忆文件的敏感程度保护。日志含路径和操作结果，不保存任务正文；CLI 输出仅保留在当前进程内存，最多 32,000 字符。积分配置保存选定窗口标题、控件及活动文案，不读取密码输入框、令牌或客户端凭据文件；可见文案仍可能含个人信息。打开官方活动链接及客户端领取会使用浏览器或第三方客户端的网络连接。
 
 ## 常见问题
 
@@ -177,7 +203,9 @@ console-data/
 - **旧版提示“技能目录包含链接或 junction”**：升级至 v0.1.2 后可直接检查和统计本地链接中的技能。需要同步或备份时，在详情点击“授权技能链接”，核对实际指向；无需拆除链接。
 - **链接已授权但提示重新授权**：链接的实际指向或目录结构发生了影响授权的变化。核对新位置，重新授权后生成新预览。
 - **预览后文件发生变化**：重新刷新并生成预览，不要直接重复执行旧计划。
+- **积分桥接不可用**：源码运行先执行 `npm run build:rewards`；成品检查完整的 `resources/rewards/RewardBridge.exe` 和系统 .NET Framework 组件，不要只复制主 EXE。
+- **积分无法检查或结果未知**：先解锁桌面，打开已绑定客户端并保持窗口可见。若已提交领取却显示未知，先在客户端核对实际结果，再重新校准，不要反复点击试领。客户端更新或账号切换后也应重新绑定或校准。
 - **台账校验异常或超过 32 MiB**：同步写入、备份、启动和路径授权变更会被阻止。关闭应用，保留完整 `console-data` 备份并检查 `activity.jsonl`；需归档时将原台账完整移出数据目录后重启，新日志会形成新的链。不要将手工改写的旧日志当作完整审计记录。
 - **源/目标很大或包含脚本**：检查统计、兼容文本复制与完整仓库同步采用不同限制。兼容复制上限 200 个文件 / 16 MiB；统一仓库支持 5,000 个文件 / 256 MiB、普通单文件 32 MiB，技能迁移的 `.git/objects/pack/*.pack` 可至 128 MiB。脚本和资源只保存字节，不执行。文本合并另受 1 MiB 限制。详见 [安全限制](docs/SECURITY.md)。
 
-开发扩展请阅读 [架构说明](docs/ARCHITECTURE.md)；厂商能力与官方依据见 [集成说明](docs/INTEGRATIONS.md)；安全边界见 [安全说明](docs/SECURITY.md)。
+开发扩展请阅读 [架构说明](docs/ARCHITECTURE.md)；厂商能力与官方依据见 [集成说明](docs/INTEGRATIONS.md) 和 [积分活动说明](docs/REWARDS.md)；安全边界见 [安全说明](docs/SECURITY.md)。

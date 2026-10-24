@@ -60,8 +60,17 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.match(await qoderIntegration.innerText(), /文档适配/);
     assert.match(await qoderIntegration.innerText(), /用户绑定 EXE 启动/);
     await page.screenshot({path:path.join(project,'test-results','portable-integrations.png')});
+    const rewards = await page.evaluate(() => window.consoleApi.rewardsSnapshot());
+    assert.equal(rewards.nativeAvailable, true, 'portable extraction must retain the native rewards component');
+    assert.equal(rewards.providers.length, 9);
+    assert.equal(rewards.providers.filter(provider => provider.kind === 'ui').length, 4);
+    assert.ok(rewards.providers.every(provider => !provider.profile), 'portable discovery must not bind or enable claims');
+    await page.getByRole('button', {name:'积分福利',exact:true}).click();
+    await page.locator('[data-reward-id]').first().waitFor();
+    assert.equal(await page.locator('[data-reward-id]').count(), 9);
+    await page.screenshot({path:path.join(project,'test-results','portable-rewards.png')});
     await page.close();
-    console.log(`PASS portable: standalone launcher extracted and opened, ${state.agents.length} registered adapters, Qoder card and file-only configuration, local bridge, isolated profile, renderer without Node, navigation.`);
+    console.log(`PASS portable: standalone launcher extracted and opened, ${state.agents.length} registered adapters, Qoder card and file-only configuration, 9 rewards entries, extracted native component, no default claim grants, local bridge, isolated profile, renderer without Node, navigation.`);
   } finally {
     if (browser) {
       for (const context of browser.contexts()) for (const page of context.pages()) await page.close().catch(()=>{});
