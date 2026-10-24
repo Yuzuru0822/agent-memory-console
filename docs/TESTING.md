@@ -2,7 +2,26 @@
 
 本地服务测试、真实 Electron 窗口测试和厂商集成验证分别记录。测试中的记忆、技能、脚本和 PE 字节均为人工夹具，不来自真实 Agent，也不执行技能脚本。
 
-## v0.4.0 本轮验证
+## v0.5.0 本轮验证
+
+本轮增加任务中心、持久化总暂停、托盘常驻和本地报表。测试使用隔离配置；托盘运行测试替换系统托盘传输层，保留真实 Electron 主进程、preload、IPC、窗口生命周期和 PNG 解码。**未实际操作用户托盘、登录账号或厂商 UIA，不将模拟余额和领取计为真实账号验证。**
+
+| 检查 | 当前状态 | 范围 |
+| --- | --- | --- |
+| `npm test` | 296 通过、2 跳过、0 失败（共 298 项） | 新增 37 项任务/仓库调度/托盘回归；两项文件符号链接权限用例跳过，目录 junction 实际通过 |
+| 任务控制与报表 | 19 项通过 | 持久化暂停与到期、严格配置和损坏时暂停、20 项任务与跨周期领取、稳定问题、导出字段与 CSV 公式防护 |
+| 仓库任务状态 | 8 项通过 | 轻量元数据、结构化冲突/授权/错误、预览等待；在途同步收尾后总暂停阻止清理且保留冲突状态 |
+| 托盘模块 | 10 项通过 | 注入传输层验证菜单回调、暂停更新、PNG 字节、创建/更新失败、外部失效、幂等销毁及失效旧回调 |
+| `node tests/tasks-desktop.cjs` | 72 项断言通过 | 真实 Electron UI + 模拟任务 IPC；20 项任务、分类筛选、问题定位、全局横幅、托盘开关、CSV、异常保留及 1000px 布局 |
+| `node tests/tasks-runtime.cjs` | 已通过 | 实际主进程与固定 IPC；暂停阻挡各阶段、在途暂停不启动后续阶段、恢复保留独立授权、取消退出计时器仍运行、CSV 取消/保存/非法目标拒绝、托盘隐藏/显示/失效回退；系统托盘和调度服务用隔离替身 |
+| `npm run test:desktop` | 已通过 | 七个 Agent、原有记忆/技能/junction 同步、备份恢复、npm 与 Qoder、权限及布局 |
+| `node tests/rewards-balance-desktop.cjs` | 76 项断言通过 | 余额配置、监控、错误/过期/零值、历史与验证后自动领取回归，厂商窗口为夹具 |
+| Windows 成品与构建一致性 | 已通过 | 0.5.0 解包与便携解压启动、20 项任务、默认托盘关闭且未增加授权；29 个 ASAR 编译文件与最终构建逐字节一致，原生组件 SHA-256 一致且拒绝无效协议；成品未签名 |
+| 成品内 Git 回归 | 已通过 | 实际 0.5.0 ASAR 中初始化、文本/二进制提交、重启历史、内层 Git 保留与排除；无真实 Agent 授权 |
+
+已查看 `tasks-center.png`、`tasks-compact.png` 与 `tasks-inventory.png`：深色界面、20 项任务和八项导航可用；示例状态均为人工夹具。真实 Windows 托盘菜单外观、系统重启后的用户会话体验、厂商账号实际领取和余额读取仍需人工验证。设计与行为说明见 [自动任务设计](AUTOMATION.md)。
+
+## v0.4.0 历史验证
 
 本轮加入验证后开启自动领取、独立余额监控与领取前后采样。测试均使用隔离配置和人工控件夹具；**未在真实账号领取积分、读取真实余额或验证实际到账**。本机 Windows 桌面锁定后停止真实客户端操作。
 
@@ -115,13 +134,15 @@ npm run test:desktop
 node tests/repository-desktop.cjs
 node tests/rewards-desktop.cjs
 node tests/rewards-balance-desktop.cjs
-npm run dist -- --config.directories.output=release-0.4.0
-node tests/packaged.cjs "release-0.4.0/win-unpacked/Agent Memory Console.exe"
-node tests/repository-packaged.cjs "release-0.4.0/win-unpacked/Agent Memory Console.exe"
-node tests/portable.cjs "release-0.4.0/Agent-Memory-Console-0.4.0-win-x64.exe"
+node tests/tasks-desktop.cjs
+node tests/tasks-runtime.cjs
+npm run dist -- --config.directories.output=release-0.5.0
+node tests/packaged.cjs "release-0.5.0/win-unpacked/Agent Memory Console.exe"
+node tests/repository-packaged.cjs "release-0.5.0/win-unpacked/Agent Memory Console.exe"
+node tests/portable.cjs "release-0.5.0/Agent-Memory-Console-0.5.0-win-x64.exe"
 ```
 
-需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.4.0`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。以上命令是本版验证入口，是否已执行以顶部结果表为准。
+需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.5.0`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。以上命令是本版验证入口，是否已执行以顶部结果表为准。
 
 桌面测试需要完整 Electron 运行时和可用图形桌面，不能用单纯浏览器预览替代。electron-builder 使用已安装的 `node_modules/electron/dist`。
 
@@ -143,6 +164,9 @@ node tests/portable.cjs "release-0.4.0/Agent-Memory-Console-0.4.0-win-x64.exe"
 | `rewards-service.test.ts` | 领取校准、风险控件拒绝、活动窗口去重、未知结果暂停、持久化与并发；验证后自动开启及余额前后采样隔离 |
 | `rewards-balance.test.ts` | 余额字段/数字/父容器校验、单字段历史、真实零值、错误保留、过期、低阈值、轮询及导航恢复 |
 | `rewards-windows.test.ts` | 固定原生程序及受限 JSON 协议、超时/输出限额、直接父索引；纯原生投影和无效协议，不操作厂商界面 |
+| `task-center.test.ts` | 暂停持久化和到期、损坏设置保持暂停、任务/问题优先级与跨周期领取、固定字段 CSV |
+| `repository-tasks.test.ts` | 轻量调度状态、预览/冲突/授权变化、在途暂停阻止后续清理但不打断同步 |
+| `task-tray.test.ts` | 隔离菜单回调、PNG、创建/更新/外部失效、销毁与旧回调失效 |
 
 文件符号链接测试若因系统权限不足被跳过，应在顶部结果表记录跳过数及原因；不能将跳过计为通过。目录 junction 通常无需同样权限，需实际创建和验证。模拟 PE 字节只验证格式，不是可运行的程序。
 

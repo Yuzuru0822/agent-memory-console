@@ -74,6 +74,15 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.ok(balances.providers.every(provider => !provider.profile && !provider.sample && !provider.low), 'portable must not fabricate current balances');
     assert.equal(await page.locator('[data-balance-id]').count(), 9);
     await page.screenshot({path:path.join(project,'test-results','portable-rewards.png')});
+    const tasks = await page.evaluate(() => window.consoleApi.taskCenterSnapshot());
+    assert.equal(tasks.tasks.length,20);
+    assert.equal(tasks.controls.closeToTray,false);
+    assert.equal(tasks.runtime.trayAvailable,false);
+    assert.ok(tasks.tasks.every(task=>!task.enabled));
+    await page.getByRole('button',{name:'任务中心',exact:true}).click();
+    await page.locator('[data-task-id]').first().waitFor();
+    assert.equal(await page.locator('[data-task-id]').count(),20);
+    await page.screenshot({path:path.join(project,'test-results','portable-tasks.png')});
     await page.close();
     console.log(`PASS portable: standalone launcher extracted and opened, ${state.agents.length} registered adapters, Qoder card and file-only configuration, 9 rewards entries, extracted native component, no default claim grants, local bridge, isolated profile, renderer without Node, navigation.`);
   } finally {

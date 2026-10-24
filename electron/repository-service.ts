@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { AgentId } from "../src/shared";
+import type { RepositoryTaskStatus } from "../src/task-types";
 import type { RepositoryAutomation, RepositoryConfig, RepositorySnapshot, RepositoryPlan, RepositoryFile, RepositoryResolution, JunctionView } from "../src/repository-types";
 import { ConsoleService } from "./service";
 import { atomicWrite, digest, localPath, noLinks, within } from "./safety";
@@ -14,7 +15,7 @@ import { bytes, hash, plainText, inventory, relativePath, samePath, pathKey, TOT
 const defaults: RepositoryAutomation = { enabled: false, intervalSeconds: 60, cleanupEnabled: false, retentionDays: 30, minBackups: 20 };
 interface Base { hash: string; blob?: string; agent: AgentId; kind: "memory" | "skills"; relative: string }
 interface Receipt { source: string; target: string; backupPath: string; repositoryBackupPath?: string }
-interface State { version: 1; bases: Record<string, Base>; links: Partial<Record<AgentId, Receipt>>; lastRun?: string; lastMessage?: string }
+interface State { version: 1; bases: Record<string, Base>; links: Partial<Record<AgentId, Receipt>>; lastRun?: string; lastMessage?: string; lastIssue?: "conflict" | "grant" | "error" }
 interface Pair { view: RepositoryFile; realLocal: string; local?: Buffer; repository?: Buffer; output?: Buffer; localHash: string | null; repositoryHash: string | null }
 interface Stored { view: RepositoryPlan; pairs: Pair[]; configHash: string }
 interface BackupManifest { version: 1; id: string; root: string; at: string; completed: boolean; files: { target: string; blob?: string; hash: string | null }[] }
@@ -45,15 +46,15 @@ export class RepositoryService {
     const c = this.config();
     return digest(JSON.stringify({ root: c.root, ids: c.agentIds, memoryFolders: c.memoryFolders, agents: c.agentIds.map(id=>this.console.settings(id)) }));
   }
-  private area(): string {
+  private area(create = true): string {
     const area = path.join(this.console.storage, "repository-data", digest(this.config().root).slice(0, 24));
-    noLinks(area); fs.mkdirSync(area, { recursive: true }); return area;
+    noLinks(area); if (create) fs.mkdirSync(area, { recursive: true }); return area;
   }
-  private state(): State {
-    const file = path.join(this.area(), "state.json");
+  private state(readOnly = false): State {
+    const file = path.join(this.area(!readOnly), "state.json");
     if (!fs.existsSync(file)) return { version: 1, bases: {}, links: {} };
     const s = readJson<State>(file);
-    if (s.version !== 1 || !s.bases || !s.links || Object.keys(s.bases).length > 30000) throw new Error("仓库同步基线损坏");
+    if (s.version !== 1 || !s.bases || !s.links || Object.keys(s.bases).length > 30000 || s.lastIssue !== undefined && !["conflict", "grant", "error"].includes(s.lastIssue)) throw new Error("仓库同步基线损坏");
     return s;
   }
   private saveState(s: State): void { atomicWrite(path.join(this.area(), "state.json"), JSON.stringify(s, null, 2)); }
@@ -100,6 +101,25 @@ export class RepositoryService {
     inventory(root, { memory: true });
     c.memoryFolders[id] = root; c.automation.enabled = false; delete c.autoGrant;
     this.console.persistRepository(); this.invalidate(); this.audit("memory-folder", `${id} · ${root}`);
+  }
+  /** Scheduling metadata only: never scans skills, reads file contents or invokes Git. */
+  taskStatus(now = Date.now()): RepositoryTaskStatus {
+    const c = this.console.config.repository;
+    const status: RepositoryTaskStatus = { configured: !!c, syncEnabled: !!c?.automation.enabled,
+      cleanupEnabled: !!c?.automation.cleanupEnabled, running: this.running,
+      intervalSeconds: c?.automation.intervalSeconds || defaults.intervalSeconds };
+    if (!c) return status;
+    try {
+      const state = this.state(true);
+      status.lastRun = state.lastRun; status.lastMessage = state.lastMessage; status.issue = state.lastIssue;
+      const expiries = [...this.plans.values()].map(plan => Date.parse(plan.view.expiresAt))
+        .concat([...this.junctions.values()].map(plan => plan.at + 300000)).filter(at => at > now);
+      if (expiries.length) status.previewUntil = new Date(Math.max(...expiries)).toISOString();
+      if (status.syncEnabled || status.cleanupEnabled) status.nextCheck = new Date(Math.max(now, this.lastTick + status.intervalSeconds * 1000)).toISOString();
+    } catch (error) {
+      status.issue = "error"; status.error = String(error instanceof Error ? error.message : error).slice(0, 300);
+    }
+    return status;
   }
   async snapshot(): Promise<RepositorySnapshot> {
     const c = this.console.config.repository;
@@ -314,7 +334,7 @@ export class RepositoryService {
         if (blob && (state.bases[p.view.key]?.hash!==h || state.bases[p.view.key]?.blob!==blob)) atomicWrite(path.join(this.area(), "bases", blob), p.output!);
         state.bases[p.view.key] = { hash: h, blob, agent: p.view.agent, kind: p.view.kind, relative: p.view.relative };
       }
-      state.lastRun = new Date().toISOString(); state.lastMessage = `双向同步完成：${changed.length} 个文件；不传播删除`;
+      state.lastRun = new Date().toISOString(); state.lastMessage = `双向同步完成：${changed.length} 个文件；不传播删除`; delete state.lastIssue;
       this.saveState(state);
       if (backup) { backup.manifest.completed = true; atomicWrite(path.join(backup.folder,"manifest.json"),JSON.stringify(backup.manifest,null,2)); }
       if (changed.length || checkpoint.changed || committed.changed) this.audit("sync", `${changed.length} 个文件 · ${c.root}`);
@@ -348,27 +368,34 @@ export class RepositoryService {
     this.console.persistRepository(); this.lastTick = Date.now(); this.invalidate();
     this.audit("automation", JSON.stringify(options));
   }
-  async tick(now = Date.now()): Promise<void> {
+  async tick(now = Date.now(), canContinue: () => boolean = () => true): Promise<void> {
     const c = this.console.config.repository;
     if (!c || this.running || now - this.lastTick < c.automation.intervalSeconds * 1000) return;
     if ([...this.plans.values()].some(p=>Date.parse(p.view.expiresAt)>now) || [...this.junctions.values()].some(p=>now-p.at<300000)) return;
     this.lastTick = now;
     if (!c.automation.enabled && !c.automation.cleanupEnabled) return;
+    let issue: State["lastIssue"] = "error";
     try {
       if (c.automation.enabled) {
         if (c.autoGrant !== this.grantHash()) {
           c.automation.enabled = false; this.console.persistRepository();
+          issue = "grant";
           throw new Error("授权范围已变化，自动同步已暂停，请重新启用");
         }
         const plan = await this.preview();
-        if (plan.files.some(f=>f.conflict)) throw new Error("自动同步遇到冲突，整批暂缓；请预览并解决冲突");
+        if (plan.files.some(f=>f.conflict)) { issue = "conflict"; throw new Error("自动同步遇到冲突，整批暂缓；请预览并解决冲突"); }
         await this.apply(plan.id);
       }
-      if (c.automation.cleanupEnabled) this.cleanup(now);
+      if (c.automation.cleanupEnabled && canContinue()) {
+        this.cleanup(now);
+        // A successful cleanup does not resolve an outstanding sync conflict or grant change.
+        const s = this.state();
+        if (s.lastIssue === "error") { delete s.lastIssue; this.saveState(s); }
+      }
     } catch (error) {
       const s = this.state(), message = (error as Error).message;
       if (s.lastMessage !== message && this.console.verifyAudit().valid) this.audit("auto-paused",message);
-      s.lastRun = new Date(now).toISOString(); s.lastMessage = message; this.saveState(s);
+      s.lastRun = new Date(now).toISOString(); s.lastMessage = message; s.lastIssue = issue; this.saveState(s);
     }
   }
   private backups(): { folder: string; manifest: BackupManifest }[] {

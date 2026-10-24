@@ -27,6 +27,7 @@ import {
   Layers3,
   LayoutDashboard,
   Link2,
+  ListChecks,
   LoaderCircle,
   LockKeyhole,
   Pause,
@@ -44,11 +45,14 @@ import {
 import type { AgentId, AgentView, PathKind, Plan, Snapshot, SkillsInfo } from "./shared";
 import RepositoryPanel from "./RepositoryPanel";
 import RewardsPanel from "./RewardsPanel";
+import TaskCenterPanel from "./TaskCenterPanel";
+import type { TaskControlsSnapshot } from "./task-types";
 
 const api = window.consoleApi;
-type Tab = "overview" | "repository" | "rewards" | "sync" | "backups" | "activity" | "integrations";
+type Tab = "overview" | "tasks" | "repository" | "rewards" | "sync" | "backups" | "activity" | "integrations";
 const nav = [
   { id: "overview", name: "监控总览", icon: LayoutDashboard },
+  { id: "tasks", name: "任务中心", icon: ListChecks },
   { id: "repository", name: "统一仓库", icon: Database },
   { id: "rewards", name: "积分福利", icon: Gift },
   { id: "sync", name: "记忆与技能", icon: Layers3 },
@@ -129,7 +133,27 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [prompt, setPrompt] = useState("");
   const [auto, setAuto] = useState(true);
+  const [taskControls, setTaskControls] = useState<TaskControlsSnapshot>();
+  const [taskControlsError, setTaskControlsError] = useState<string>();
   const refreshing = useRef(false);
+  useEffect(() => {
+    if (!api) return;
+    let active = true;
+    let pending = false;
+    async function pollControls() {
+      if (pending) return;
+      pending = true;
+      try {
+        const next = await api!.taskControlsSnapshot();
+        if (active) { setTaskControls(next); setTaskControlsError(undefined); }
+      } catch (error) {
+        if (active) setTaskControlsError(String(error).replace(/^Error: Error invoking remote method '[^']+': Error: /, ""));
+      } finally { pending = false; }
+    }
+    void pollControls();
+    const timer = setInterval(() => void pollControls(), 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, []);
   async function refresh() {
     if (!api || refreshing.current) return;
     refreshing.current = true;
@@ -508,6 +532,12 @@ export default function App() {
             </button>
           </div>
         </header>
+        {(taskControls?.controls.paused || taskControls?.controls.error || taskControlsError) && <aside className={`tasks-global-pause ${taskControls?.controls.error || taskControlsError ? "is-error" : ""}`} aria-label="自动任务全局状态" role="status">
+          <Pause size={20} /><div>
+            <strong>{taskControls?.controls.paused ? "自动任务已统一暂停" : "自动任务状态需要检查"}</strong>
+            <p>{taskControls?.controls.paused && (taskControls.controls.pauseUntil ? `暂停至 ${date(taskControls.controls.pauseUntil)}。` : "暂停直到主动恢复。")}{taskControls?.runtime.busy && taskControls?.controls.paused ? "已有操作正在收尾；后续自动任务暂停。" : "手动操作仍可使用。"}{taskControls?.controls.error || taskControlsError ? ` ${taskControls?.controls.error || taskControlsError}` : ""}</p>
+          </div><button className="small" onClick={() => setTab("tasks")}>查看任务中心<ArrowRight size={13} /></button>
+        </aside>}
         {!data ? (
           <div className="loading">
             <LoaderCircle className="spin" />
@@ -775,7 +805,7 @@ export default function App() {
                 </div>
                 <div className="notice-strip">
                   <span className="online-dot" />
-                  文件状态来自实际检查；额度、登录状态与厂商会话尚未接入。
+                  文件状态来自实际检查；积分余额需单独配置监控，登录状态与厂商会话尚未接入。
                   <button onClick={() => setTab("integrations")}>
                     查看支持范围
                     <ArrowRight size={13} />
@@ -822,6 +852,7 @@ export default function App() {
             )}
             {tab === "repository" && <RepositoryPanel onChange={refresh} />}
             {tab === "rewards" && <RewardsPanel />}
+            {tab === "tasks" && <TaskCenterPanel onNavigate={setTab} onControls={snapshot => { setTaskControls(snapshot); setTaskControlsError(undefined); }} />}
             {tab === "sync" && (
               <>
                 <div className="page-heading">
@@ -1069,7 +1100,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.4.0</b>
+                AGENT MEMORY CONSOLE <b>v0.5.0</b>
               </span>
             </footer>
           </>

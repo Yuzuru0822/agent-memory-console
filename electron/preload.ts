@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ConsoleApi } from "../src/shared";
 const api: ConsoleApi = {
+  taskCenterSnapshot: () => ipcRenderer.invoke("console:taskCenterSnapshot"),
+  taskControlsSnapshot: () => ipcRenderer.invoke("console:taskControlsSnapshot"),
+  taskPause: minutes => ipcRenderer.invoke("console:taskPause", minutes),
+  taskResume: () => ipcRenderer.invoke("console:taskResume"),
+  taskTray: enabled => ipcRenderer.invoke("console:taskTray", enabled),
+  taskReport: kind => ipcRenderer.invoke("console:taskReport", kind),
   rewardBalancesSnapshot: () => ipcRenderer.invoke("console:rewardBalancesSnapshot"),
   rewardBalanceBind: id => ipcRenderer.invoke("console:rewardBalanceBind", id),
   rewardBalanceInspect: id => ipcRenderer.invoke("console:rewardBalanceInspect", id),

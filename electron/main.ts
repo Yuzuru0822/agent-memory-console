@@ -11,10 +11,13 @@ import { RepositoryService } from "./repository-service";
 import { RewardsService } from "./rewards-service";
 import { RewardsBalanceService } from "./rewards-balance";
 import { WindowsRewardsBridge } from "./rewards-windows";
+import { TaskCenterService } from "./task-center";
+import { TaskTray } from "./task-tray";
+import type { TaskRuntime, TaskSources } from "../src/task-types";
 import type { RewardId } from "../src/rewards-types";
 import type { BalanceUnit } from "../src/rewards-balance-types";
 import type { RepositoryAutomation, RepositoryResolution } from "../src/repository-types";
-import { noLinks } from "./safety";
+import { atomicWrite, localPath, noLinks } from "./safety";
 import type { AgentId, PickKind, PathKind, SkillAccess } from "../src/shared";
 import { resolveSkillPath } from "./skill-paths";
 import type { ClaudeNpmInstallation } from "./claude-npm";
@@ -33,6 +36,9 @@ let processes: Processes;
 let repository: RepositoryService;
 let rewards: RewardsService;
 let balances: RewardsBalanceService;
+let tasks: TaskCenterService;
+let taskTray: TaskTray;
+let quitting = false;
 let rewardCalibrationUntil = 0;
 let busy = false;
 const validId = (value: unknown): AgentId => {
@@ -62,6 +68,33 @@ const npmDescription = (npm: ClaudeNpmInstallation) =>
   `npm 包：@anthropic-ai/claude-code ${npm.packageVersion}\n安装入口：${npm.launcher}\n实际程序：${npm.entry}${npm.node ? "\nNode.js：" + npm.node : ""}\n\n将直接启动以上程序，不执行 CMD 脚本。请确认安装来源可信；包名与格式检查不验证厂商签名。`;
 const skillsDescription = (access: SkillAccess, source: boolean) =>
   `技能目录：${access.root}\n实际根目录：${access.realRoot}\n\n${access.links.length ? access.links.map(l=>`${l.path}\n  → ${l.target}`).join("\n") : "未发现链接"}\n\n${source ? "这些实际位置将作为共享只读源。" : "同步将写入这些实际位置并保留链接。其他使用这些链接的 Agent 也会看到修改。"}每次同步仍需预览和确认；链接目标改变后须重新授权。`;
+function showWindow() {
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show(); window.focus();
+}
+function taskRuntime(): TaskRuntime {
+  return { busy, calibrationUntil: rewardCalibrationUntil > Date.now() ? new Date(rewardCalibrationUntil).toISOString() : undefined,
+    trayAvailable: taskTray?.available ?? false, windowVisible: !!window && !window.isDestroyed() && window.isVisible() };
+}
+function taskSources(): TaskSources {
+  return { repository: repository.taskStatus(), rewards: rewards.snapshot(), balances: balances.snapshot(), auditValid: service.verifyAudit().valid };
+}
+function updateTray() {
+  if (!taskTray?.available) {
+    if (tasks?.controls().closeToTray && window && !window.isDestroyed() && !window.isVisible()) showWindow();
+    return;
+  }
+  try { taskTray.update(tasks.controls().paused); }
+  catch (error) { showWindow(); console.error("Tray update failed:", String(error)); }
+}
+async function resumeTasks() {
+  if (tasks.controls().error && !(await confirm("恢复自动任务控制设置", "任务控制设置损坏，当前已暂停。确认后重建控制设置并恢复原来已授权、已开启的自动任务，关闭托盘常驻。不会开启已关闭或未知结果的领取任务。"))) return {message:"保持暂停"};
+  tasks.resume();
+  if (!tasks.controls().closeToTray) { showWindow(); taskTray.destroy(); }
+  updateTray(); return {message:"已恢复自动调度；各任务仍遵守原有开关与授权"};
+}
+function requestQuit() { quitting = true; window.close(); }
 function trusted(event: IpcMainInvokeEvent) {
   if (
     event.sender !== window.webContents ||
@@ -87,6 +120,38 @@ function handler(
   });
 }
 function register() {
+  handler("taskControlsSnapshot", () => ({ controls: tasks.controls(), runtime: taskRuntime() }), false);
+  handler("taskCenterSnapshot", () => tasks.snapshot(taskSources(), taskRuntime()), false);
+  // Pausing must remain available while an in-flight operation holds the shared lock.
+  handler("taskPause", (minutes: unknown) => {
+    if (minutes !== null && minutes !== 15 && minutes !== 60) throw new Error("暂停时长无效");
+    tasks.pause(minutes); updateTray();
+    return {message:"后续自动任务已暂停；当前操作正常收尾，手动功能仍可使用"};
+  }, false);
+  handler("taskResume", () => resumeTasks());
+  handler("taskTray", (enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("托盘设置无效");
+    if (enabled) {
+      taskTray.enable(tasks.controls().paused);
+      try { tasks.setCloseToTray(true); } catch (error) { if (!tasks.controls().closeToTray) taskTray.destroy(); throw error; }
+    } else { tasks.setCloseToTray(false); showWindow(); taskTray.destroy(); }
+    return {message:enabled ? "托盘常驻已开启，关闭窗口后继续运行" : "托盘常驻已关闭，关闭窗口将退出控制台"};
+  });
+  handler("taskReport", async (kind: unknown) => {
+    if (kind !== "tasks" && kind !== "balances") throw new Error("报表类型无效");
+    // Capture before acquiring the save dialog result; exported fields are fixed and exclude raw errors/paths.
+    const report = tasks.report(kind, taskSources(), { ...taskRuntime(), busy: false });
+    const chosen = await dialog.showSaveDialog(window, { title: kind === "tasks" ? "导出自动任务概况" : "导出余额采样记录",
+      defaultPath: path.join(app.getPath("documents"), `agent-console-${kind}-${new Date().toISOString().slice(0, 10)}.csv`),
+      filters: [{name:"CSV 报表", extensions:["csv"]}] });
+    if (chosen.canceled || !chosen.filePath) return {message:"已取消报表导出"};
+    const destination = localPath(chosen.filePath);
+    if (path.extname(destination).toLowerCase() !== ".csv") throw new Error("报表必须保存为 .csv 文件");
+    service.assertWritablePath(destination); noLinks(destination); noLinks(path.dirname(destination));
+    if (!fs.statSync(path.dirname(destination)).isDirectory() || fs.existsSync(destination) && !fs.lstatSync(destination).isFile()) throw new Error("报表目标必须是普通本地文件");
+    atomicWrite(destination, report.startsWith("\uFEFF") ? report : "\uFEFF" + report);
+    return {message:kind === "tasks" ? "任务概况已导出；包含状态与时间，不含本机路径或原始日志" : "余额采样已导出；变化值不代表领取收益"};
+  });
   const rewardId = (value: unknown): RewardId => rewards.definition(value).id;
   handler("rewardsSnapshot", () => rewards.snapshot(), false);
   handler("rewardsBind", async (value: unknown) => {
@@ -357,8 +422,7 @@ function register() {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", () => {
-    window?.show();
-    window?.focus();
+    showWindow();
   });
   app
     .whenReady()
@@ -385,6 +449,7 @@ else {
         ? path.join(process.resourcesPath, "rewards", "RewardBridge.exe")
         : path.join(app.getAppPath(), "native", "bin", "RewardBridge.exe"));
       balances = new RewardsBalanceService(service, rewardsBridge);
+      tasks = new TaskCenterService(service);
       rewards = new RewardsService(service, rewardsBridge, undefined, undefined, async (id, reason) => {
         if (balances.isConfigured(id)) await balances.refresh(id, reason);
       });
@@ -416,24 +481,52 @@ else {
       window.webContents.on("will-attach-webview", (event) =>
         event.preventDefault(),
       );
+      taskTray = new TaskTray({ show: showWindow, togglePause: () => {
+        if (tasks.controls().paused) {
+          if (busy) { showWindow(); return; }
+          busy = true;
+          void resumeTasks().catch(error => { showWindow(); dialog.showErrorBox("无法恢复自动任务", String(error)); }).finally(() => { busy = false; });
+        } else {
+          try { tasks.pause(null); updateTray(); }
+          catch (error) { showWindow(); dialog.showErrorBox("无法暂停自动任务", String(error)); }
+        }
+      }, quit: requestQuit });
+      if (tasks.controls().closeToTray) {
+        try { taskTray.enable(tasks.controls().paused); }
+        catch (error) { console.error("Tray unavailable; window will remain accessible:", String(error)); }
+      }
       register();
       const repositoryTimer = setInterval(() => {
-        if (busy || !window || window.isDestroyed()) return;
+        updateTray();
+        if (busy || !window || window.isDestroyed() || !tasks.canRunAutomatic()) return;
         busy = true;
-        void repository.tick().catch(error => console.error("Repository automatic task failed:", String(error)))
-          .then(() => Date.now() >= rewardCalibrationUntil ? rewards.tick() : undefined).catch(error => console.error("Rewards automatic task failed:", String(error)))
-          .then(() => Date.now() >= rewardCalibrationUntil ? balances.tick() : undefined).catch(error => console.error("Balance automatic task failed:", String(error))).finally(() => { busy = false; });
+        void repository.tick(Date.now(), () => tasks.canRunAutomatic()).catch(error => console.error("Repository automatic task failed:", String(error)))
+          .then(() => tasks.canRunAutomatic() && Date.now() >= rewardCalibrationUntil ? rewards.tick() : undefined).catch(error => console.error("Rewards automatic task failed:", String(error)))
+          .then(() => tasks.canRunAutomatic() && Date.now() >= rewardCalibrationUntil ? balances.tick() : undefined).catch(error => console.error("Balance automatic task failed:", String(error))).finally(() => { busy = false; });
       }, 5000);
-      app.once("before-quit", () => clearInterval(repositoryTimer));
-      let closing = false;
-      window.on("close", (event) => {
+      app.once("will-quit", () => { clearInterval(repositoryTimer); taskTray.destroy(); });
+      app.on("before-quit", (event) => {
+        quitting = true;
         if (busy) {
-          event.preventDefault();
+          event.preventDefault(); quitting = false; showWindow();
+          void dialog.showMessageBox(window, {type:"info",message:"本地操作尚未完成",detail:"当前操作收尾后可以从托盘彻底退出。",buttons:["返回控制台"],noLink:true});
+        }
+      });
+      let closing = false;
+      let exitPrompt = false;
+      window.on("close", (event) => {
+        if (!quitting && tasks.controls().closeToTray && taskTray.available) {
+          event.preventDefault(); window.hide(); return;
+        }
+        if (busy) {
+          event.preventDefault(); quitting = false; showWindow();
           void dialog.showMessageBox(window, {type:"info",message:"本地操作尚未完成",detail:"请等待当前同步、备份、积分领取或 Git 保存完成后再关闭控制台。",buttons:["返回控制台"],defaultId:0,noLink:true});
           return;
         }
         if (closing || !processes.active().length) return;
         event.preventDefault();
+        if (exitPrompt) return;
+        exitPrompt = true; showWindow();
         void dialog
           .showMessageBox(window, {
             type: "warning",
@@ -448,8 +541,8 @@ else {
             if (r.response === 1) {
               closing = true;
               window.close();
-            }
-          });
+            } else quitting = false;
+          }).catch(error => { quitting = false; console.error("Exit prompt failed:", String(error)); }).finally(() => { exitPrompt = false; });
       });
       if (dev) void window.loadURL(expectedUrl);
       else void window.loadFile(productionFile);

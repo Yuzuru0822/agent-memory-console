@@ -118,6 +118,16 @@ const path = require('node:path');
       }
     }
     await page.screenshot({ path: path.join(resultPath, 'packaged-rewards.png'), fullPage: true });
+    const taskState = await page.evaluate(() => window.consoleApi.taskCenterSnapshot());
+    assert.equal(taskState.tasks.length, 20);
+    assert.equal(taskState.controls.paused, false);
+    assert.equal(taskState.controls.closeToTray, false);
+    assert.equal(taskState.runtime.trayAvailable, false);
+    assert.ok(taskState.tasks.every(task => !task.enabled), 'task overview must never grant automation');
+    await page.getByRole('button', {name:'任务中心', exact:true}).click();
+    await page.locator('[data-task-id]').first().waitFor();
+    assert.equal(await page.locator('[data-task-id]').count(),20);
+    await page.screenshot({path:path.join(resultPath,'packaged-tasks.png'),fullPage:true});
     await page.getByRole('button', { name: '监控总览', exact: true }).click();
     await page.screenshot({ path: path.join(resultPath, 'packaged-dashboard.png'), fullPage: true });
     assert.deepEqual(errors, []);
