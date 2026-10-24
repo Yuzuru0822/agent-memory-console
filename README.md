@@ -1,18 +1,18 @@
 # Agent Memory Console
 
-用于 Windows 的本地 Agent 管理控制台，采用 Electron、React 和 TypeScript。深色界面提供六个 Agent 卡片、独立 Git 记忆与技能仓库、双向合并、定时同步、技能 junction 连接、备份与活动日志。原有单文件共享源作为兼容模式保留。
+用于 Windows 的本地 Agent 管理控制台，采用 Electron、React 和 TypeScript。深色界面提供七个 Agent 卡片、独立 Git 记忆与技能仓库、双向合并、定时同步、技能 junction 连接、备份与活动日志。原有单文件共享源作为兼容模式保留。
 
-这是可运行的本地文件与进程管理工程。Claude Code CLI 按官方文档适配用户级记忆、技能路径及单次任务；WorkBuddy、TRAE、DeepSeek Harness、智谱 Zcode、千问 Work 使用候选路径或手动绑定，尚未验证厂商协议兼容性。界面不会把文件发现结果显示成登录、额度或会话状态。完整范围见 [集成说明](docs/INTEGRATIONS.md)。
+这是可运行的本地文件与进程管理工程。Claude Code CLI 按官方文档适配用户级记忆、技能路径及单次任务；v0.2.2 新增 Qoder 的用户技能、CLI 静态指令候选和 IDE EXE 启动，未接入 Qoder CLI 任务或 IDE 自动记忆。WorkBuddy、TRAE、DeepSeek Harness、智谱 Zcode、千问 Work 使用候选路径或手动绑定，尚未验证厂商协议兼容性。界面不会把文件发现结果显示成登录、额度或会话状态。完整范围见 [集成说明](docs/INTEGRATIONS.md)。
 
 私有源码仓库：[Yuzuru0822/agent-memory-console](https://github.com/Yuzuru0822/agent-memory-console)，需使用有访问权限的 GitHub 账户。
 
 ## 运行
 
-便携单文件版可直接双击 `Agent-Memory-Console-0.2.1-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.2.1-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
+便携单文件版可直接双击 `Agent-Memory-Console-0.2.2-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.2.2-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
 
 已取得解包版时，无需安装 Node.js：保留 `win-unpacked` 整个目录及其中所有资源，双击目录内的 `Agent Memory Console.exe`。不能只复制这一个 EXE，或直接在压缩包预览窗口内运行它。工程中的对应位置为 `release/win-unpacked/`。
 
-本版建议将成品输出到 `release-0.2.1/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.2.1/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
+本版建议将成品输出到 `release-0.2.2/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.2.2/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
 
 从源码运行或重新打包时，按以下步骤操作。
 
@@ -106,7 +106,9 @@ junction 连接后，从 Agent 路径或仓库路径访问的是同一份技能�
 
 ## 启动 Agent
 
-在 Agent 详情中选择并授权本地 `.exe` 和运行工作目录，然后点击“启动程序”。其他五个适配器只提供通用 EXE 启动，不向厂商派发任务。
+在 Agent 详情中选择并授权本地 `.exe` 和运行工作目录，然后点击“启动程序”。除 Claude 外的六个适配器只提供通用 EXE 启动，不向厂商派发任务。
+
+Qoder 默认检查 `~\.qoder\skills` 与 IDE EXE。它的 `~\.qoder\AGENTS.md` 候选仅表示 CLI 用户静态指令，不是 IDE 自动记忆；项目文件、规则或多文件记忆目录，以及地区版、自定义配置目录，均需手动选择实际路径。本机 IDE 可从 PATH 中的 `bin` 父目录发现；`qoder.cmd` 不会被执行，也不作为 CLI 任务入口。
 
 Claude Code 支持原生 Windows CLI 和 `npm install -g @anthropic-ai/claude-code` 安装，需自行完成登录。原生版绑定 `claude.exe`。npm 版在详情的“npm 安装”区域点击“授权检测到的 npm 安装”，核对版本、实际程序以及需要时的 Node.js 路径；随后选择运行工作目录、填写任务并点击“运行任务”。未自动发现时，在“Claude 程序（EXE / claude.cmd）”中手动选择安装目录的 `claude.cmd`。
 
@@ -114,7 +116,7 @@ npm 自动发现检查环境中的 npm prefix、`%APPDATA%\npm`、nvm 路径和�
 
 两种安装方式都使用固定参数 `-p`，任务经标准输入传入，展示输出和退出码。控制台不会安装 Claude、代管密钥或绕过 Claude 的权限规则。任务可能联网、产生费用或修改工作目录中的文件；确认启动前请阅读任务内容。
 
-`claude.cmd` 仅用于定位受支持的 npm 包，不读取或执行脚本正文。不执行任意 `.cmd`、`.bat`、PowerShell 脚本、快捷方式或命令字符串。其他五个适配器仍只接受 EXE。控制台只追踪自己启动的直接子进程。“停止所属进程”不会结束外部已运行程序或整个进程树；桌面程序启动器退出后，独立运行的应用状态可能未知。关闭控制台后也不能恢复此前的进程追踪。
+`claude.cmd` 仅用于定位受支持的 npm 包，不读取或执行脚本正文。不执行任意 `.cmd`、`.bat`、PowerShell 脚本、快捷方式或命令字符串。除 Claude 外的六个适配器仍只接受 EXE。控制台只追踪自己启动的直接子进程。“停止所属进程”不会结束外部已运行程序或整个进程树；桌面程序启动器退出后，独立运行的应用状态可能未知。关闭控制台后也不能恢复此前的进程追踪。
 
 ## 检查与打包
 
@@ -143,10 +145,10 @@ node tests/portable.cjs
 | `npm run pack` | 构建 Windows x64 解包版，输出至 `release/win-unpacked/` |
 | `node tests/packaged.cjs` | 启动上述解包成品并检查打包状态、沙箱、原生接口和页面切换；使用独立测试配置目录 |
 | `node tests/repository-packaged.cjs "成品 EXE 路径"` | 检查 ASAR 内嵌 Git 初始化、文本和二进制提交、重启后的历史及版本读取；使用独立仓库，不授权 Agent |
-| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.2.1-win-x64.exe` |
+| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.2.2-win-x64.exe` |
 | `node tests/portable.cjs` | 启动便携单文件成品并检查自动解压、隔离配置、原生接口和页面切换 |
 
-打包后的应用携带 Electron，用户运行时不需要 Node.js。便携版不等于数据随 EXE 存放：数据仍写入 Windows 用户数据目录。此工程没有配置代码签名、自动更新或安装器；Windows 可能对未签名程序显示提示。项目测试不代表已完成六家厂商客户端的真实账户端到端测试。
+打包后的应用携带 Electron，用户运行时不需要 Node.js。便携版不等于数据随 EXE 存放：数据仍写入 Windows 用户数据目录。此工程没有配置代码签名、自动更新或安装器；Windows 可能对未签名程序显示提示。项目测试不代表已完成七家厂商客户端的真实账户端到端测试。
 
 依赖中 Electron 固定为 `45.0.0`；构建配置的 `electronDist` 指向 `node_modules/electron/dist`，直接使用安装好的 Electron 运行时。因此打包前须完成 `npm ci` 和 Electron 运行时下载，不能仅保留 Electron 的 JavaScript 包或缺失其 `dist` 目录。
 
@@ -170,7 +172,7 @@ console-data/
 
 ## 常见问题
 
-- **显示“未配置”**：文件候选只覆盖少量固定目录；仅 npm Claude 额外检查有限的 PATH 与 npm prefix，不扫描注册表或全盘。通过详情手动选择实际位置。
+- **显示“未配置”**：文件候选只覆盖少量固定目录；npm Claude 额外检查有限的 PATH 与 npm prefix，Qoder IDE 额外检查有限的 PATH / `bin` 父目录，不扫描注册表或全盘。通过详情手动选择实际位置。
 - **有文件但同步被跳过**：只读发现不授予写权限。请先选择并授权目标，随后重新预览。
 - **旧版提示“技能目录包含链接或 junction”**：升级至 v0.1.2 后可直接检查和统计本地链接中的技能。需要同步或备份时，在详情点击“授权技能链接”，核对实际指向；无需拆除链接。
 - **链接已授权但提示重新授权**：链接的实际指向或目录结构发生了影响授权的变化。核对新位置，重新授权后生成新预览。

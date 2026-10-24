@@ -2,7 +2,26 @@
 
 本地服务测试、真实 Electron 窗口测试和厂商集成验证分别记录。测试中的记忆、技能、脚本和 PE 字节均为人工夹具，不来自真实 Agent，也不执行技能脚本。
 
-## v0.2.1 本轮验证
+## v0.2.2 本轮验证
+
+本轮接入第七个 Agent Qoder，已有六个 Agent 配置保持兼容。测试使用隔离夹具，不修改真实 Qoder 的技能或记忆。
+
+| 检查 | 当前状态 | 范围 |
+| --- | --- | --- |
+| `npm test` | 180 通过、2 跳过、0 失败（共 182 项） | 新增 7 项 Qoder 回归；两项 Windows 文件符号链接权限跳过，目录 junction 实际通过 |
+| Qoder 发现与授权 | 已通过 | 默认新旧 IDE EXE、Program Files、有空格的 PATH / bin 父目录、128 项上限、非法路径过滤、发现不授权、旧配置原样加载 |
+| Qoder 仓库同步与连接 | 已通过 | 多文件记忆、两端修改及不传播删除；完整 Git 历史、hooks、忽略资产、二进制和空目录的 junction 导入与解除；不执行脚本 |
+| Qoder 启动校验 | 已通过 | 需要已授权 EXE 与工作目录、固定空参数、不使用 Claude CLI 参数、拒绝 CMD 和变化后的无效 PE；不真实启动 Qoder |
+| `npm run build` | 已通过 | TypeScript 与 Vite 生产构建、版本 0.2.2 |
+| `npm run test:desktop` | 已通过 | 七张卡片、动态计数、Qoder 配置/发现/授权取消/确认/撤销、文件路径能力标签，以及既有桌面回归；Renderer 异常为零，窄窗口无横向溢出 |
+| 本机 Qoder 只读发现 | 已通过 | 找到已安装 IDE EXE 和用户级技能目录；13 个技能、无自动授权；未更改真实 Agent 文件 |
+| `node tests/repository-desktop.cjs` | 14 场景通过 | 仓库初始化、多文件记忆、冲突处理、完整技能/Git 导入与解除、自动任务和布局 |
+| Windows x64 解包与便携成品 | 已通过 | 0.2.2 可见窗口、沙箱、七个适配器、Qoder 详情与能力、独立配置、便携自动解压；成品未签名 |
+| 内嵌 Git 与构建一致性 | 已通过 | 成品内 Git 初始化/提交/重启历史读取，内层 Git 保留；20 个 ASAR 编译文件与最终构建字节一致 |
+
+已查看 `test-results/qoder-details.png` 与 `dashboard-compact.png`，确认配置说明、七卡片和深色布局正常。尚未验证真实 Qoder 登录、技能加载、任务运行或 IDE 自动记忆内部存储；本版不提供 Qoder CLI 任务派发。路径与产品差异见 [集成说明](INTEGRATIONS.md)。
+
+## v0.2.1 历史验证
 
 本轮增加技能迁移保留普通内层 Git 仓库的能力。以下状态独立于 v0.2.0 的历史结果，使用当前源码与 0.2.1 成品验证。
 
@@ -52,13 +71,13 @@ node tests/process-smoke.cjs
 node tests/npm-process-smoke.cjs
 npm run test:desktop
 node tests/repository-desktop.cjs
-npm run dist -- --config.directories.output=release-0.2.1
-node tests/packaged.cjs "release-0.2.1/win-unpacked/Agent Memory Console.exe"
-node tests/repository-packaged.cjs "release-0.2.1/win-unpacked/Agent Memory Console.exe"
-node tests/portable.cjs "release-0.2.1/Agent-Memory-Console-0.2.1-win-x64.exe"
+npm run dist -- --config.directories.output=release-0.2.2
+node tests/packaged.cjs "release-0.2.2/win-unpacked/Agent Memory Console.exe"
+node tests/repository-packaged.cjs "release-0.2.2/win-unpacked/Agent Memory Console.exe"
+node tests/portable.cjs "release-0.2.2/Agent-Memory-Console-0.2.2-win-x64.exe"
 ```
 
-需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.2.1`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。以上命令是本版验证入口，是否已执行以顶部结果表为准。
+需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.2.2`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。以上命令是本版验证入口，是否已执行以顶部结果表为准。
 
 桌面测试需要完整 Electron 运行时和可用图形桌面，不能用单纯浏览器预览替代。electron-builder 使用已安装的 `node_modules/electron/dist`。
 
@@ -82,7 +101,7 @@ node tests/portable.cjs "release-0.2.1/Agent-Memory-Console-0.2.1-win-x64.exe"
 
 ## 桌面 UI 检查
 
-`tests/desktop.cjs` 保留 v0.1.x 的流程覆盖：六张卡片、无 Renderer Node、上下文隔离/沙箱、共享源同步、授权取消与确认、实际链接映射、备份恢复、npm 入口授权及撤销、页面切换和窄窗口。
+`tests/desktop.cjs` 保留 v0.1.x 的流程覆盖，并扩展为七张卡片、无 Renderer Node、上下文隔离/沙箱、共享源同步、授权取消与确认、实际链接映射、备份恢复、npm 入口授权及撤销、页面切换和窄窗口。
 
 新增 `tests/repository-desktop.cjs` 启动真实 Electron，通过仅开发模式可用的 `CONSOLE_TEST_HOME` 与 `CONSOLE_TEST_DATA` 隔离到 `../../work/repository-desktop-<时间戳>/`，检查：
 
@@ -101,7 +120,7 @@ node tests/portable.cjs "release-0.2.1/Agent-Memory-Console-0.2.1-win-x64.exe"
 
 `process-smoke.cjs`、`npm-process-smoke.cjs` 使用无害 Node 替身检查真实进程生命周期，不调用真实 Claude 或模型。通用子进程测试验证仅停止本控制台持有的句柄；不会通过名称杀死其他程序。
 
-`packaged.cjs` 用独立 `--user-data-dir` 启动解包 EXE，确认打包状态、版本、可见窗口、沙箱、受限接口、六张卡片和导航。`portable.cjs` 验证 NSIS 单文件解压后启动，使用仅绑定 `127.0.0.1` 的临时 CDP 端口连接并清理测试进程。正常双击不附带这些调试参数。
+`packaged.cjs` 用独立 `--user-data-dir` 启动解包 EXE，确认打包状态、版本、可见窗口、沙箱、受限接口、七张卡片和导航。`portable.cjs` 验证 NSIS 单文件解压后启动，使用仅绑定 `127.0.0.1` 的临时 CDP 端口连接并清理测试进程。正常双击不附带这些调试参数。
 
 `repository-packaged.cjs` 在独立配置与空夹具目录中，通过实际成品初始化仓库、保存记忆和完整技能资产，重启后检查历史及提交内容；始终断言没有 Agent 路径或自动同步授权。
 

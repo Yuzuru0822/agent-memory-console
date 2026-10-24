@@ -7,6 +7,7 @@
 | Agent | 记忆候选 | 技能候选 | 进程能力与依据 |
 | --- | --- | --- | --- |
 | Claude Code CLI | `~\.claude\CLAUDE.md` | `~\.claude\skills` | 官方文档适配；原生或 npm 安装版，授权后执行固定 `-p` 单次任务 |
+| Qoder | `~\.qoder\AGENTS.md`，仅 CLI 用户静态指令 | `~\.qoder\skills` | 官方文件路径适配；授权后启动 IDE EXE，未接入 Qoder CLI 任务协议或 IDE 自动记忆 |
 | WorkBuddy | `~\.workbuddy\MEMORY.md` | `~\.workbuddy\skills` | 参考界面的候选布局；通用 EXE 启动，文件兼容性待验证 |
 | TRAE | `~\.trae-cn\memory\user_profile.md`、`~\.trae\memory\user_profile.md` | `~\.trae-cn\skills`、`~\.trae\skills` | 候选布局；通用 EXE 启动，加载规则待验证 |
 | DeepSeek Harness | `~\.dsh\AGENTS.md` | `~\.dsh\skills` | 参考界面的 `.dsh` 候选；未实现 DSH CLI 协议，支持手动绑定独立桌面 EXE |
@@ -35,16 +36,29 @@ EXE 发现候选为 `~\.local\bin\claude.exe` 和 `~\.claude\local\claude.exe`�
 
 支持自定义 prefix 的空格路径及 nvm 外层 junction：授权时解析出实际入口与 Node 路径并在确认框显示，包内链接仍拒绝。每次启动重新检查；入口、运行时或 prefix 重定向变化需要重新授权，同路径版本更新在重新校验后可使用。命令参数使用数组传入，固定为 `-p`，不经过 CMD 或 PowerShell。
 
+## Qoder
+
+v0.2.2 新增统一 Qoder 卡片，使用桌面启动模式。用户级技能候选为 `~\.qoder\skills`；完整技能通常位于 `<skill-name>\SKILL.md`，项目级技能位于 `<project>\.qoder\skills`。授权后的文件可使用备份、双向同步及统一仓库 junction 连接。官方 IDE 文档要求手动安装技能后重启 IDE 并通过 `/` 检查加载结果；控制台发现文件或创建 junction 不等于验证 Qoder 已加载它。依据见 [Qoder IDE Skills](https://docs.qoder.com/extensions/skills) 和 [Qoder CLI Skills](https://docs.qoder.com/cli/Skills)。
+
+记忆候选 `~\.qoder\AGENTS.md` 明确属于 **Qoder CLI 的用户静态指令**，不是 Qoder IDE 的自动记忆。CLI 的项目指令还包括 `<project>\AGENTS.md`、`AGENTS.local.md`，项目规则位于 `<project>\.qoder\rules`；IDE 也公开了项目 `.qoder/rules` 规则目录。项目文件需要手动选择，规则或多文件记忆目录需要在“统一仓库”中单独授权；不扫描全部项目，也不因候选不存在而自动创建文件。依据见 [CLI Memory](https://docs.qoder.com/cli/memory) 和 [IDE Rules](https://docs.qoder.com/user-guide/rules)。
+
+IDE 的自动记忆通过知识中心或 IDE 设置管理，官方 Memory 文档未公布可直接同步的 Markdown 文件路径，本版未接入其内部记忆存储。CLI 的可选 Auto-Memory 另使用 `~\.qoder\projects\<project>\memory` 与可选的 `~\.qoder\memory`，也不会自动扫描；如需纳管，应先在 CLI 的 `/memory` 确认实际位置，再手动授权对应目录，不能把整个 `.qoder` 用户目录当成记忆库。依据见 [IDE Memory](https://docs.qoder.com/user-guide/knowledge-engine/memory) 和 [CLI Memory](https://docs.qoder.com/cli/memory)。
+
+不同发行版和产品的目录不能混用：国际 CLI 的用户目录默认为 `~\.qoder`，可由 `QODER_CONFIG_DIR` 改写；CN CLI 默认为 `~\.qoder-cn`，可由 `QODERCN_CONFIG_DIR` 改写；CN IDE 文档中的技能和项目规则仍使用 `~\.lingma\skills`、`<project>\.lingma\rules`。本版仅自动发现国际版默认候选，地区版与自定义目录都需手动选择。依据见 [国际 CLI 配置范围](https://docs.qoder.com/cli/config-scope)、[CN CLI 配置范围](https://docs.qoder.cn/cli/config-scope)、[CN IDE Skills](https://docs.qoder.cn/user-guide/skills) 和 [CN IDE Rules](https://docs.qoder.cn/user-guide/rules)。
+
+IDE Windows 入口在 1.25.1 起改名为 `Qoder IDE.exe`，保留旧版 `Qoder.exe` 作为候选，依据见 [IDE 更新日志](https://docs.qoder.com/release-notes/desktop)。除常见安装目录外，只读检查最多 128 个 PATH 目录及其 `bin` 父目录，不读取或执行 `qoder.cmd`。同名 PATH 命令可能只是 IDE 启动器，不能据此判定已安装 CLI。本机仅验证了 `D:\Program Files\Qoder IDE\Qoder IDE.exe` 及技能候选目录存在，未启动 Qoder、读取其记忆或凭据正文，也未验证真实账户、技能加载或任务执行。本版不运行 `qoder -p`、`qodercn` 或 npm Qoder 包。
+
 ## 桌面程序候选
 
 | Agent | EXE 候选 |
 | --- | --- |
 | WorkBuddy | `%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe` |
 | TRAE | `%LOCALAPPDATA%\Programs\Trae CN\Trae CN.exe`、`%LOCALAPPDATA%\Programs\Trae\Trae.exe` |
+| Qoder | `%LOCALAPPDATA%\Programs\Qoder IDE\Qoder IDE.exe`、旧版 `Programs\Qoder\Qoder.exe`；也检查 Program Files 与有限 PATH / `bin` 父目录 |
 | 千问 Work | `%LOCALAPPDATA%\Programs\Qianwen\Qianwen.exe` |
 | 智谱 Zcode、DeepSeek Harness | 无；需要手动选择 |
 
-这些候选不是经验证的安装规范。实际启动一律要求显式绑定 EXE 与工作目录，并由用户确认。控制台不验证 EXE 的厂商签名；其他五个适配器不传递任务参数。桌面启动器若把工作转交给既有实例后退出，控制台只会显示这个启动器的退出结果。
+候选路径需与实际安装核对；Qoder 的 EXE 名称有上述官方更新日志依据，其他候选不是经验证的安装规范。实际启动一律要求显式绑定 EXE 与工作目录，并由用户确认。控制台不验证 EXE 的厂商签名；除 Claude 外的六个适配器不传递任务参数。桌面启动器若把工作转交给既有实例后退出，控制台只会显示这个启动器的退出结果。
 
 ## 已实现与未实现
 
@@ -52,6 +66,6 @@ EXE 发现候选为 `~\.local\bin\claude.exe` 和 `~\.claude\local\claude.exe`�
 
 v0.2.1 的统一仓库迁移可保留技能根或子目录内普通 `.git` 目录中的原历史与远程配置，适用于所有已授权的 Agent 技能目录。中央 Git 只记录工作文件；独立副本的双向同步排除 `.git`，不合并或传播内层历史。junction 连接后直接访问同一份内层 Git。控制台不调用内层 hooks 或远程操作；外置 `.git` 文件、worktree、`alternates` 依赖需先转为独立 clone 再迁移。保留这些数据不等于验证厂商会如何使用它们。
 
-不提供：厂商登录与额度 API、历史会话检索、跨厂商会话迁移、其他五家任务派发、已运行进程接管、网络链接目标、脚本技能执行、任意 shell 命令或任意 npm 包启动。Git 仅保存在本地，不自动 push；应用退出后定时同步停止。同步不传播删除，自动清理不删记忆或技能；junction 连接后访问的是同一份文件，Agent 自身的修改和删除会直接作用于仓库。
+不提供：厂商登录与额度 API、历史会话检索、跨厂商会话迁移、除 Claude 外的六家任务派发、已运行进程接管、网络链接目标、脚本技能执行、任意 shell 命令或任意 npm 包启动。Git 仅保存在本地，不自动 push；应用退出后定时同步停止。同步不传播删除，自动清理不删记忆或技能；junction 连接后访问的是同一份文件，Agent 自身的修改和删除会直接作用于仓库。
 
-官方依据核对日期：2026-10-23。厂商能力和路径可能变化，发布前仍需使用实际安装版本逐项验证；候选布局没有升级为官方文档依据。
+官方依据核对日期：Claude 为 2026-10-23，Qoder 为 2026-10-24。厂商能力和路径可能变化，发布前仍需使用实际安装版本逐项验证；其他候选布局没有升级为官方文档依据。

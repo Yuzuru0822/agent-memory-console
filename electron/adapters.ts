@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { AgentId } from "../src/shared";
 import { npmDiscoveryPaths, type NpmDiscoveryOptions } from "./claude-npm";
+import { qoderExecutableCandidates } from "./qoder";
 
 /** Extend this registry to add an adapter. Paths are candidates, never a write grant. */
 export interface Adapter {
@@ -69,6 +70,19 @@ export function createAdapters(home: string, local: string, environment: NodeJS.
         h(".local", "bin", "claude.exe"),
         h(".claude", "local", "claude.exe"),
       ],
+    },
+    {
+      id: "qoder",
+      name: "Qoder",
+      subtitle: "IDE · 记忆与技能",
+      accent: "#94d982",
+      glyph: "Qd",
+      integration: "documented",
+      mode: "desktop",
+      note: "技能采用官方 .qoder/skills 目录，可同步或连接统一仓库。AGENTS.md 候选仅是 Qoder CLI 用户静态指令，不是 IDE 自动记忆；IDE 项目 AGENTS.md 请手选，规则或多文件记忆目录请在统一仓库中授权。地区版和自定义路径请手选。授权后可启动 IDE EXE；未接入 CLI 任务、会话或额度。",
+      memory: [h(".qoder", "AGENTS.md")],
+      skills: [h(".qoder", "skills")],
+      executables: qoderExecutableCandidates(local, environment),
     },
     {
       id: "qwen",

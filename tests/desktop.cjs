@@ -25,6 +25,8 @@ const path = require("node:path");
   const skillActual = path.join(fixture, "linked-library", "review");
   const skillLink = path.join(skillTarget, "review");
   const skillBefore = "# Earlier review skill\n";
+  const qoderMemory = path.join(fixture, "qoder-local", "AGENTS.md");
+  const qoderSkills = path.join(home, ".qoder", "skills");
   const before = "# Local memory\n\nExisting notes, preserved in backup.\n";
   const after = "# Shared memory\n\nUse UTF-8. Keep changes reviewable.\n";
   write(target, before);
@@ -47,6 +49,8 @@ const path = require("node:path");
   write(path.join(home, ".claude", "CLAUDE.md"), "# Claude instructions\n");
   write(path.join(home, ".claude", "skills", "notes", "SKILL.md"), "# Notes\n");
   write(path.join(home, ".dsh", "AGENTS.md"), "# Harness instructions\n");
+  write(qoderMemory, "# Qoder static memory fixture\n");
+  write(path.join(qoderSkills, "fixture-review", "SKILL.md"), "# Qoder review fixture\n");
   const npmPrefix = path.join(home, "AppData", "Roaming", "npm");
   const npmEntry = path.join(npmPrefix, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
   write(path.join(npmPrefix, "claude.cmd"), "@echo fixture - must never be executed");
@@ -83,7 +87,13 @@ const path = require("node:path");
     const page = await app.firstWindow();
     page.on("pageerror", (e) => errors.push(e.message));
     await page.waitForSelector(".agent-card", { timeout: 20000 });
-    assert.equal(await page.locator(".agent-card").count(), 6);
+    const initialSnapshot = await page.evaluate(() => window.consoleApi.snapshot());
+    const registeredIds = initialSnapshot.agents.map(agent => agent.id);
+    assert.equal(new Set(registeredIds).size, registeredIds.length, "adapter IDs must be unique");
+    for (const id of ["workbuddy", "trae", "claude", "qwen", "zcode", "deepseek", "qoder"])
+      assert.ok(registeredIds.includes(id), `registered adapter must remain available: ${id}`);
+    assert.equal(await page.locator(".agent-card").count(), initialSnapshot.agents.length);
+    assert.equal(await page.locator(".filter-group .filter").first().locator("b").innerText(), String(initialSnapshot.agents.length));
     assert.equal(await page.evaluate(() => typeof window.require), "undefined");
     assert.equal(
       await page.evaluate(() => typeof window.consoleApi.snapshot),
@@ -103,6 +113,58 @@ const path = require("node:path");
       contextIsolation: true,
       nodeIntegration: false,
     });
+    const qoder = initialSnapshot.agents.find(agent => agent.id === "qoder");
+    assert.equal(qoder.mode, "desktop", "Qoder file-path integration must not expose Claude task mode");
+    assert.equal(qoder.memoryApproved, false);
+    assert.equal(qoder.skillsApproved, false);
+    assert.equal(qoder.executableApproved, false);
+    assert.equal(qoder.skills.path, qoderSkills);
+    assert.equal(qoder.skills.count, 1);
+    const qoderCard = page.locator(".agent-card").filter({ has: page.getByRole("heading", { name: "Qoder", exact: true }) });
+    assert.match(await qoderCard.locator(".support-label").innerText(), /文档适配.*文件路径/);
+    assert.doesNotMatch(await qoderCard.locator(".support-label").innerText(), /CLI/);
+    await qoderCard.getByRole("button", { name: /查看检查与配置/ }).click();
+    const qoderDetails = page.getByRole("dialog", { name: "Qoder 详情" });
+    await qoderDetails.waitFor();
+    assert.equal(await qoderDetails.locator(".npm-installation").count(), 0);
+    assert.equal(await qoderDetails.locator("#task").count(), 0);
+    assert.equal(await qoderDetails.getByRole("button", { name: "启动程序", exact: true }).isDisabled(), true);
+    const qoderMemoryBlock = qoderDetails.locator(".config-blocks .config-block").filter({ has: page.getByRole("heading", { name: "记忆文件", exact: true }) });
+    await app.evaluate(({ dialog }, selectedFile) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedFile] });
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
+    }, qoderMemory);
+    await qoderMemoryBlock.getByRole("button", { name: "选择并授权", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[role="status"]')?.textContent.includes("未授权"));
+    assert.equal((await page.evaluate(() => window.consoleApi.snapshot())).agents.find(agent => agent.id === "qoder").memoryApproved, false, "cancelling Qoder authorization must not grant access");
+    await app.evaluate(({ dialog }, selectedFile) => {
+      dialog.showMessageBox = async (_window, options) => {
+        if (!options.detail.includes(selectedFile)) throw new Error("Qoder memory confirmation must show the selected file");
+        return { response: 1, checkboxChecked: false };
+      };
+    }, qoderMemory);
+    await qoderMemoryBlock.getByRole("button", { name: "选择并授权", exact: true }).click();
+    await page.waitForFunction(async expected => {
+      const agent = (await window.consoleApi.snapshot()).agents.find(value => value.id === "qoder");
+      return agent.memoryApproved && agent.memory.path === expected;
+    }, qoderMemory);
+    const qoderSkillsBlock = qoderDetails.locator(".config-blocks .config-block").filter({ has: page.getByRole("heading", { name: "技能目录", exact: true }) });
+    await app.evaluate(({ dialog }, selectedDirectory) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedDirectory] });
+      dialog.showMessageBox = async (_window, options) => {
+        if (!options.detail.includes(selectedDirectory)) throw new Error("Qoder skills confirmation must show the selected directory");
+        return { response: 1, checkboxChecked: false };
+      };
+    }, qoderSkills);
+    await qoderSkillsBlock.getByRole("button", { name: "选择并授权", exact: true }).click();
+    await page.waitForFunction(async () => (await window.consoleApi.snapshot()).agents.find(agent => agent.id === "qoder").skillsApproved);
+    assert.equal(fs.readFileSync(qoderMemory, "utf8"), "# Qoder static memory fixture\n", "path authorization must not alter Qoder memory");
+    await page.screenshot({ path: path.join(results, "qoder-details.png") });
+    await qoderMemoryBlock.getByRole("button", { name: "撤销授权", exact: true }).click();
+    await page.waitForFunction(async () => !(await window.consoleApi.snapshot()).agents.find(agent => agent.id === "qoder").memoryApproved);
+    await qoderSkillsBlock.getByRole("button", { name: "撤销授权", exact: true }).click();
+    await page.waitForFunction(async () => !(await window.consoleApi.snapshot()).agents.find(agent => agent.id === "qoder").skillsApproved);
+    await page.getByRole("button", { name: "关闭详情", exact: true }).click();
     const linkedBefore = (await page.evaluate(() => window.consoleApi.snapshot()))
       .agents.find((agent) => agent.id === "workbuddy");
     assert.equal(linkedBefore.skills.count, 1);
@@ -248,7 +310,7 @@ const path = require("node:path");
     await page.getByRole("button", { name: "刷新", exact: true }).click();
     await page
       .locator(".agent-card")
-      .first()
+      .filter({ hasText: "WorkBuddy" })
       .getByRole("button", { name: /查看检查与配置/ })
       .click();
     await page.getByRole("dialog", { name: "WorkBuddy 详情" }).waitFor();
@@ -293,6 +355,13 @@ const path = require("node:path");
       "监控总览",
     ]) {
       await page.getByRole("button", { name: label, exact: true }).click();
+      if (label === "集成能力") {
+        assert.equal(await page.locator(".integration-row").count(), initialSnapshot.agents.length);
+        const qoderIntegration = page.locator(".integration-row").filter({ hasText: "Qoder" });
+        assert.match(await qoderIntegration.innerText(), /文档适配/);
+        assert.match(await qoderIntegration.innerText(), /用户绑定 EXE 启动/);
+        assert.doesNotMatch(await qoderIntegration.innerText(), /原生 \/ npm 单次任务/);
+      }
     }
     await page
       .getByRole("button", { name: "关闭提示", exact: true })
@@ -319,7 +388,7 @@ const path = require("node:path");
     });
     assert.deepEqual(errors, []);
     console.log(
-      "PASS desktop: real Electron, six adapters, isolated preload, linked-skill display/cancel/approval, junction-preserving skill sync/restore, preview, cancel, memory sync, backups, restore, invalid IPC, launch authorization, npm discovery/cancel/approval/revocation, navigation, responsive layout.",
+      `PASS desktop: real Electron, ${initialSnapshot.agents.length} registered adapters, Qoder discovery/card/path authorization/cancel/revocation and file-only capabilities, isolated preload, linked-skill display/cancel/approval, junction-preserving skill sync/restore, preview, cancel, memory sync, backups, restore, invalid IPC, launch authorization, npm discovery/cancel/approval/revocation, navigation, responsive layout.`,
     );
     console.log("Screenshots: " + results);
   } finally {

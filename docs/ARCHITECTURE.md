@@ -10,7 +10,7 @@
 | `src/RepositoryPanel.tsx` / `src/repository.css` | 独立仓库设置、纳管成员、多文件记忆、三方冲突处理、技能连接与自动化设置 |
 | `src/repository-types.ts` | 仓库视图、同步计划、冲突选择与固定 IPC 契约 |
 | `src/shared.ts` | Agent ID、视图、配置、同步计划及 IPC 接口类型 |
-| `electron/adapters.ts` | 六个内置适配器的显示信息、候选路径和能力标签 |
+| `electron/adapters.ts` | 七个内置适配器的显示信息、候选路径和能力标签 |
 | `electron/preload.ts` | 通过 `contextBridge` 暴露固定 `consoleApi`，不暴露 Node 或原始 IPC |
 | `electron/main.ts` | 窗口、单实例、IPC 来源和参数检查、原生路径选择及确认框 |
 | `electron/service.ts` | 路径绑定、状态快照、同步计划、备份恢复、活动台账 |
@@ -18,6 +18,7 @@
 | `electron/skill-paths.ts` | 技能专用本地链接解析、逻辑/实际路径映射、元数据检查与受限文本扫描 |
 | `electron/processes.ts` | 原生 EXE 启动、所属子进程状态、停止和输出缓冲 |
 | `electron/claude-npm.ts` | 受限 npm 发现、包布局解析、实际路径检查与授权描述重新校验 |
+| `electron/qoder.ts` | Qoder IDE 的常见安装目录及有限 PATH / `bin` 父目录候选；不读取或执行 CMD 启动器 |
 | `electron/repository-git.ts` | 通过 isomorphic-git 初始化中央仓库、状态、提交和历史；只记录工作文件，排除技能内层 Git 元数据；不启动 Git 子进程 |
 | `electron/repository-files.ts` | 仓库文件枚举、容量限制、二进制读取、路径约束和文本识别 |
 | `electron/repository-service.ts` | 仓库与成员授权、双向计划/备份/共同版本、自动同步、保留清理及链接恢复回执 |
@@ -30,6 +31,8 @@
 ## 状态与发现
 
 适配器列出候选记忆文件、技能目录及 EXE。用户绑定优先于候选路径；未绑定时选择第一个存在的候选，没有候选存在则显示第一个待发现路径。候选扫描只读，不执行程序、不注册服务，也不构成同步授权。
+
+Qoder 使用 `mode: 'desktop'`，提供国际版 `~/.qoder/skills` 和 CLI 静态指令 `~/.qoder/AGENTS.md` 候选；后者不代表 IDE 自动记忆。IDE EXE 候选覆盖新旧名称、常见安装目录及最多 128 个 PATH 目录，路径末尾为 `bin` 时也检查父目录；不解析脚本、不读取注册表。项目文件、地区版和自定义目录交由用户明确绑定，未实现 Qoder CLI 任务协议。
 
 Claude adapter 另携带 npm 发现选项。`createAdapters` 默认使用空环境以隔离单元测试；生产主进程显式传入环境。`approveNpm` 在原生确认后保存 `claudeNpm` 描述（locator、包元数据路径、版本、实际入口、需要时的 Node）；它与原生 EXE 配置互斥。撤销程序授权同时清除该描述。主进程 `Processes.validate` 在每次启动前解析并比较描述，`launch` 使用实际 EXE + 固定参数数组，永不执行 CMD。既有 version 1 配置兼容这个新增可选字段，无需迁移记忆路径或备份。
 
@@ -90,7 +93,6 @@ v0.2.1 允许显式迁移携带技能根目录及子目录中的普通 `.git` �
 2. 在 `electron/adapters.ts` 注册名称、说明、外观、候选位置和能力。没有确认的厂商路径用空数组，无法验证的能力标为 `candidate`。
 3. 通用桌面应用使用 `mode: 'desktop'`。目前 `mode: 'cli'` 专用于 Claude 的固定 `-p` 协议；新 CLI 必须先在主进程增加独立的参数与输入校验，不能直接复用此模式假定兼容。
 4. 为新发现逻辑、输入限制和关键错误路径增加测试，更新集成文档。
-5. `src/App.tsx` 中总数和部分摘要当前使用六个适配器的常量；扩展时应统一改为注册表或快照中的长度。
 
 适配器不得自行获得写权限、引入 shell 字符串、默认执行技能脚本或宣称未验证的厂商协议支持。需要新的登录、任务派发等能力时，应新增有明确输入类型和授权边界的主进程 API。
 

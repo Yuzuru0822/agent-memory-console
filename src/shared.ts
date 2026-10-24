@@ -9,7 +9,7 @@ export interface SkillAccess {
 }
 
 export type AgentId =
-  "claude" | "workbuddy" | "trae" | "deepseek" | "zcode" | "qwen";
+  "claude" | "workbuddy" | "trae" | "deepseek" | "zcode" | "qwen" | "qoder";
 export type PathKind = "memory" | "skills" | "executable" | "workspace";
 export type PickKind = PathKind | "canonicalMemory" | "canonicalSkills";
 export interface AgentConfig {

@@ -561,7 +561,7 @@ export default function App() {
                 <div className="cards-toolbar">
                   <div className="filter-group">
                     {[
-                      { id: "all", label: "全部", count: 6 },
+                      { id: "all", label: "全部", count: data.agents.length },
                       { id: "ready", label: "路径完整", count: ready },
                       {
                         id: "partial",
@@ -634,7 +634,9 @@ export default function App() {
                             className={`support-label ${a.integration === "documented" ? "documented" : ""}`}
                           >
                             {a.integration === "documented"
-                              ? "文档适配 · CLI"
+                              ? a.mode === "cli"
+                                ? "文档适配 · CLI"
+                                : "文档适配 · 文件路径"
                               : "通用适配 · 待验证"}
                           </span>
                         </div>
@@ -795,7 +797,7 @@ export default function App() {
                     </div>
                     <div className="key-value">
                       <span>已一致 Agent</span>
-                      <strong className="green-text">{consistent} / 6</strong>
+                      <strong className="green-text">{consistent} / {data.agents.length}</strong>
                     </div>
                     <div className="key-value">
                       <span>活动记录</span>
@@ -992,7 +994,7 @@ export default function App() {
                       <Boxes size={17} />
                       Adapter 注册表
                     </span>
-                    <Badge>6 个内置适配器</Badge>
+                    <Badge>{data.agents.length} 个内置适配器</Badge>
                   </div>
                   <div className="integration-table">
                     <div className="integration-head">
@@ -1010,7 +1012,7 @@ export default function App() {
                           }
                         >
                           {a.integration === "documented"
-                            ? "官方文档"
+                            ? "文档适配"
                             : "候选 / 未验证"}
                         </Badge>
                         <span>
@@ -1063,7 +1065,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-          AGENT MEMORY CONSOLE <b>v0.2.1</b>
+                AGENT MEMORY CONSOLE <b>v0.2.2</b>
               </span>
             </footer>
           </>
