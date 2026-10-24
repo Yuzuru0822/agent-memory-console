@@ -9,8 +9,10 @@ import { ConsoleService } from "./service";
 import { Processes } from "./processes";
 import { RepositoryService } from "./repository-service";
 import { RewardsService } from "./rewards-service";
+import { RewardsBalanceService } from "./rewards-balance";
 import { WindowsRewardsBridge } from "./rewards-windows";
 import type { RewardId } from "../src/rewards-types";
+import type { BalanceUnit } from "../src/rewards-balance-types";
 import type { RepositoryAutomation, RepositoryResolution } from "../src/repository-types";
 import { noLinks } from "./safety";
 import type { AgentId, PickKind, PathKind, SkillAccess } from "../src/shared";
@@ -30,6 +32,8 @@ let service: ConsoleService;
 let processes: Processes;
 let repository: RepositoryService;
 let rewards: RewardsService;
+let balances: RewardsBalanceService;
+let rewardCalibrationUntil = 0;
 let busy = false;
 const validId = (value: unknown): AgentId => {
   if (typeof value !== "string") throw new Error("Agent 参数无效");
@@ -94,7 +98,7 @@ function register() {
     if (!(await confirm("绑定积分领取客户端", `${definition.name}\n${executable}\n\n将核验并绑定此程序。后续只操作该 EXE 的唯一已打开窗口，不读取登录凭据。客户端升级后需重新绑定。Qoder 每日奖励必须选择新桌面客户端，不能选择 Qoder IDE。`))) return {message:"未绑定客户端"};
     rewards.bind(id, executable); return {message:"已绑定客户端，请打开并登录后校准活动流程"};
   });
-  handler("rewardsInspect", (id: unknown) => rewards.inspect(rewardId(id)));
+  handler("rewardsInspect", (id: unknown) => { rewardCalibrationUntil = Date.now() + 5 * 60000; return rewards.inspect(rewardId(id)); });
   handler("rewardsRecord", async (id: unknown, token: unknown, index: number, kind: "navigate"|"claim") => {
     await rewards.record(rewardId(id), str(token), index, kind); return {message:kind === "navigate" ? "已记录并打开导航，请重新检查窗口" : "已记录领取按钮，尚未执行领取"};
   });
@@ -107,6 +111,12 @@ function register() {
     if (!(await confirm("试领当前免费活动", `${provider.name}\n${provider.profile?.executable || "尚未绑定"}\n\n将依次打开已记录的导航，并点击一次已记录的免费领取按钮。仅平台明确显示成功才计为领取。若上次结果未知，请先在客户端核对；不会购买、邀请、发送任务或使用重置卡。`))) return {message:"已取消试领"};
     return rewards.run(id);
   });
+  handler("rewardsStart", async (value: unknown) => {
+    const id = rewardId(value), provider = rewards.snapshot().providers.find(p => p.id === id)!;
+    if (!(await confirm("验证并开启自动领取", `${provider.name}\n${provider.profile?.executable || "尚未绑定"}\n\n将试领一次已校准的免费活动。成功后自动开启后续周期领取，无需每天手动点击；结果不明时暂停。\n\n仅控制台和已登录客户端均打开、桌面解锁且窗口可见时执行。已配置的余额会在领取前后尝试读取；余额变化不直接认定为领取收益。`))) return {message:"未开启自动领取"};
+    rewardCalibrationUntil = 0;
+    return rewards.start(id);
+  });
   handler("rewardsAutomation", async (value: unknown, enabled: boolean) => {
     const id = rewardId(value), provider = rewards.snapshot().providers.find(p => p.id === id)!;
     if (typeof enabled !== "boolean") throw new Error("自动领取参数无效");
@@ -114,6 +124,29 @@ function register() {
     rewards.automation(id, enabled); return {message:enabled ? "自动领取已启用" : "自动领取已关闭"};
   });
   handler("rewardsRule", async (value: unknown) => { await shell.openExternal(rewards.definition(rewardId(value)).sourceUrl); return {message:"已打开官方规则"}; });
+  handler("rewardBalancesSnapshot", () => balances.snapshot(), false);
+  handler("rewardBalanceBind", async (value: unknown) => {
+    const id = rewardId(value), definition = rewards.definition(id);
+    const chosen = await dialog.showOpenDialog(window, {title:`选择 ${definition.name} 的余额客户端 EXE`, properties:["openFile"], filters:[{name:"Windows 程序",extensions:["exe"]}]});
+    if (chosen.canceled || !chosen.filePaths[0]) return {message:"已取消余额绑定"};
+    if (!(await confirm("绑定余额监控客户端", `${definition.name}\n${chosen.filePaths[0]}\n\n将读取此程序已打开窗口中经过校准的余额标签和数值。仅保存余额历史与必要的窗口定位信息，不读取登录凭据；不会授权购买、兑换或领取。余额监控与领取授权相互独立。`))) return {message:"未绑定余额客户端"};
+    balances.bind(id, chosen.filePaths[0]); return {message:"余额客户端已绑定，请检查窗口并选择实际余额字段"};
+  });
+  handler("rewardBalanceInspect", (value: unknown) => { rewardCalibrationUntil = Date.now() + 5 * 60000; return balances.inspect(rewardId(value)); });
+  handler("rewardBalanceNavigate", async (value: unknown, token: unknown, index: number) => {
+    await balances.navigate(rewardId(value), str(token), index); return {message:"余额导航已记录并打开，请检查新的窗口内容"};
+  });
+  handler("rewardBalanceConfigure", (value: unknown, token: unknown, labelIndex: number, valueIndex: number, unit: BalanceUnit, intervalMinutes: number, lowThreshold?: number) => {
+    return balances.configure(rewardId(value), str(token), labelIndex, valueIndex, unit, intervalMinutes, lowThreshold);
+  });
+  handler("rewardBalanceRefresh", (value: unknown) => balances.refresh(rewardId(value)));
+  handler("rewardBalanceAutomation", async (value: unknown, enabled: boolean) => {
+    const id = rewardId(value); if (typeof enabled !== "boolean") throw new Error("余额自动监控参数无效");
+    const entry = balances.snapshot().providers.find(p => p.id === id)!;
+    if (enabled && !(await confirm("开启自动余额监控", `${rewards.definition(id).name}\n${entry.profile?.executable || "尚未绑定"}\n每 ${entry.profile?.intervalMinutes ?? 15} 分钟检查一次。\n\n将按保存的只读导航打开余额页面并记录数值；仅在控制台运行且客户端可读取时工作。失败保留上次值并标记过期。切换账号或升级客户端后请重新绑定校准，避免混合不同账号历史。`))) return {message:"余额监控设置未更改"};
+    balances.automation(id, enabled); return {message:enabled ? "自动余额监控已开启" : "自动余额监控已关闭"};
+  });
+  handler("rewardBalanceReset", (value: unknown) => { balances.reset(rewardId(value)); return {message:"余额监控配置与记录已重置；未更改厂商账号或积分"}; });
   handler("repositorySnapshot", () => repository.snapshot(), false);
   handler("repositoryChoose", async () => {
     const chosen = await dialog.showOpenDialog(window, { title: "选择独立的记忆与技能 Git 仓库目录", properties: ["openDirectory", "createDirectory"] });
@@ -348,9 +381,13 @@ else {
       );
       processes = new Processes(service);
       repository = new RepositoryService(service);
-      rewards = new RewardsService(service, new WindowsRewardsBridge(app.isPackaged
+      const rewardsBridge = new WindowsRewardsBridge(app.isPackaged
         ? path.join(process.resourcesPath, "rewards", "RewardBridge.exe")
-        : path.join(app.getAppPath(), "native", "bin", "RewardBridge.exe")));
+        : path.join(app.getAppPath(), "native", "bin", "RewardBridge.exe"));
+      balances = new RewardsBalanceService(service, rewardsBridge);
+      rewards = new RewardsService(service, rewardsBridge, undefined, undefined, async (id, reason) => {
+        if (balances.isConfigured(id)) await balances.refresh(id, reason);
+      });
       session.defaultSession.setPermissionRequestHandler(
         (_wc, _permission, callback) => callback(false),
       );
@@ -384,7 +421,8 @@ else {
         if (busy || !window || window.isDestroyed()) return;
         busy = true;
         void repository.tick().catch(error => console.error("Repository automatic task failed:", String(error)))
-          .then(() => rewards.tick()).catch(error => console.error("Rewards automatic task failed:", String(error))).finally(() => { busy = false; });
+          .then(() => Date.now() >= rewardCalibrationUntil ? rewards.tick() : undefined).catch(error => console.error("Rewards automatic task failed:", String(error)))
+          .then(() => Date.now() >= rewardCalibrationUntil ? balances.tick() : undefined).catch(error => console.error("Balance automatic task failed:", String(error))).finally(() => { busy = false; });
       }, 5000);
       app.once("before-quit", () => clearInterval(repositoryTimer));
       let closing = false;

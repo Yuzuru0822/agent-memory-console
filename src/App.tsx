@@ -1069,7 +1069,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.3.0</b>
+                AGENT MEMORY CONSOLE <b>v0.4.0</b>
               </span>
             </footer>
           </>

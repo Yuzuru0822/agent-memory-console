@@ -91,6 +91,32 @@ test("Windows reward responses reject protocol drift, duplicate indices, Edit co
   }
 });
 
+test("Windows reward inspection preserves direct parent links and optional roots", win, async t => {
+  const elements = [
+    { ...element, name: "Credits", automationId: "root", controlType: "Pane", actionable: false },
+    { ...element, index: 1, parentIndex: 0, name: "Balance", automationId: "balance-row", controlType: "Group", actionable: false },
+    { ...element, index: 2, parentIndex: 1, name: "积分余额", automationId: "label", controlType: "Text", actionable: false },
+    { ...element, index: 3, parentIndex: 1, name: "1,250", automationId: "amount", controlType: "Text", actionable: false },
+    { ...element, index: 4, name: "Unassociated visible text", automationId: "detached", controlType: "Text", actionable: false },
+  ];
+  const f = transport(t, child => child.reply({ ok: true, title: "Client", elements }));
+  assert.deepEqual((await f.bridge.inspect(f.executable)).elements, elements);
+});
+
+test("Windows reward inspection rejects ambiguous, orphaned, cyclic and forward parent links", win, async t => {
+  const invalid = [
+    ...[-1, 1, 2, 500, 0.5, "0", null, true, {}, []].map(parentIndex => [element, { ...element, index: 1, parentIndex }]),
+    [element, { ...element, index: 3, parentIndex: 2 }], // Missing parent.
+    [element, { ...element, index: 2, parentIndex: 1 }, { ...element, index: 1 }], // Not emitted yet.
+    [{ ...element, parentIndex: 1 }, { ...element, index: 1, parentIndex: 0 }], // Cycle.
+    [element, { ...element, index: 1, parentIndex: 0, ancestorIndex: 0 }],
+  ];
+  for (const elements of invalid) {
+    const f = transport(t, child => child.reply({ ok: true, title: "Client", elements }));
+    await assert.rejects(f.bridge.inspect(f.executable), /父控件关联|未知字段/);
+  }
+});
+
 test("Windows reward bridge preserves locked-desktop errors and rejects success on abnormal exit", win, async t => {
   let f = transport(t, child => child.reply({ ok: false, error: "桌面已锁定或会话未激活，请解锁后重试" }, 1));
   await assert.rejects(f.bridge.inspect(f.executable), /桌面已锁定/);
@@ -175,4 +201,90 @@ public static class ProjectionProbe {
   const result = childProcess.spawnSync(probe, [helper], { shell: false, windowsHide: true, encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
   assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { index: 0, name: "Daily free rewards", automationId: "label", controlType: "Text", enabled: true, actionable: false });
+});
+
+test("native parent projection breaks relationships at hidden or omitted nodes without accessing UIA", win, t => {
+  const f = fixture(t), helper = path.resolve(__dirname, "../native/bin/RewardBridge.exe");
+  if (!new WindowsRewardsBridge(helper).available()) { t.skip("Build RewardBridge before native projection checks"); return; }
+  // Reflection calls only pure projection functions; no window discovery, entry
+  // point, AutomationElement or actual client operation is performed.
+  const source = f.file("ParentProjectionProbe.cs", `
+using System;
+using System.Reflection;
+using System.Web.Script.Serialization;
+public static class ParentProjectionProbe {
+  public static int Main(string[] args) {
+    var type = Assembly.LoadFrom(args[0]).GetType("RewardBridge");
+    var project = type.GetMethod("DisplayElementWithParent", BindingFlags.Static | BindingFlags.NonPublic);
+    var displayedIndex = type.GetMethod("DisplayIndex", BindingFlags.Static | BindingFlags.NonPublic);
+    var root = project.Invoke(null, new object[] { 0, "Credits", "root", "Pane", true, false, false, null });
+    var rootIndex = displayedIndex.Invoke(null, new object[] { 0, root });
+    var hiddenParent = project.Invoke(null, new object[] { 1, "Hidden row", "hidden", "Group", true, false, true, rootIndex });
+    var hiddenIndex = displayedIndex.Invoke(null, new object[] { 1, hiddenParent });
+    if (hiddenParent != null || hiddenIndex != null) return 10;
+    var detachedChild = project.Invoke(null, new object[] { 1, "125", "amount", "Text", true, false, false, hiddenIndex });
+    var omittedIndex = displayedIndex.Invoke(null, new object[] { 500, null });
+    if (omittedIndex != null) return 11;
+    var visibleParent = project.Invoke(null, new object[] { 1, "Balance row", "row", "Group", true, false, false, rootIndex });
+    var parentIndex = displayedIndex.Invoke(null, new object[] { 1, visibleParent });
+    var associatedChild = project.Invoke(null, new object[] { 2, "125", "amount", "Text", true, false, false, parentIndex });
+    Console.WriteLine(new JavaScriptSerializer().Serialize(new object[] { root, detachedChild, visibleParent, associatedChild }));
+    return 0;
+  }
+}`);
+  const framework = path.join(process.env.SystemRoot!, "Microsoft.NET/Framework64/v4.0.30319");
+  const probe = path.join(f.root, "ParentProjectionProbe.exe");
+  const compiled = childProcess.spawnSync(path.join(framework, "csc.exe"), ["/nologo", "/target:exe", "/platform:x64", `/out:${probe}`, `/reference:${path.join(framework, "System.Web.Extensions.dll")}`, source], { shell: false, windowsHide: true, encoding: "utf8", timeout: 10000 });
+  assert.equal(compiled.error, undefined); assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+  const result = childProcess.spawnSync(probe, [helper], { shell: false, windowsHide: true, encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
+  const [root, detached, parent, associated] = JSON.parse(result.stdout);
+  assert.equal(Object.hasOwn(root, "parentIndex"), false);
+  assert.equal(Object.hasOwn(detached, "parentIndex"), false);
+  assert.equal(parent.parentIndex, 0);
+  assert.equal(associated.parentIndex, 1);
+  assert.equal(associated.index, 2);
+});
+
+test("native inspection projection allows 500 visible controls and refuses incomplete trees at 501", win, t => {
+  const f = fixture(t), helper = path.resolve(__dirname, "../native/bin/RewardBridge.exe");
+  if (!new WindowsRewardsBridge(helper).available()) { t.skip("Build RewardBridge before native projection checks"); return; }
+  // The append function is a pure projection: this fixture never calls Main,
+  // Scan, CheckDesktop or any UIA method, including for the overflow case.
+  const source = f.file("ProjectionLimitProbe.cs", `
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Web.Script.Serialization;
+public static class ProjectionLimitProbe {
+  public static int Main(string[] args) {
+    var append = Assembly.LoadFrom(args[0]).GetType("RewardBridge").GetMethod("AppendDisplayElement", BindingFlags.Static | BindingFlags.NonPublic);
+    var elements = new List<object>();
+    for (int index = 0; index < 500; index++) {
+      if (append.Invoke(null, new object[] { elements, "Hidden", "hidden", "Text", true, false, true, null }) != null) return 10;
+      var emittedIndex = append.Invoke(null, new object[] { elements, "Balance " + index, "row-" + index, "Text", true, false, false, null });
+      if ((int)emittedIndex != index || elements.Count != index + 1) return 11;
+    }
+    if (append.Invoke(null, new object[] { elements, "Still hidden", "hidden", "Text", true, false, true, null }) != null || elements.Count != 500) return 12;
+    string failure = null;
+    try { append.Invoke(null, new object[] { elements, "Duplicate balance outside limit", "duplicate", "Text", true, false, false, null }); }
+    catch (TargetInvocationException error) {
+      if (!(error.InnerException is InvalidOperationException)) return 13;
+      failure = error.InnerException.Message;
+    }
+    if (failure == null || elements.Count != 500) return 14;
+    Console.WriteLine(new JavaScriptSerializer().Serialize(new { count = elements.Count, last = elements[499], failure = failure }));
+    return 0;
+  }
+}`);
+  const framework = path.join(process.env.SystemRoot!, "Microsoft.NET/Framework64/v4.0.30319");
+  const probe = path.join(f.root, "ProjectionLimitProbe.exe");
+  const compiled = childProcess.spawnSync(path.join(framework, "csc.exe"), ["/nologo", "/target:exe", "/platform:x64", `/out:${probe}`, `/reference:${path.join(framework, "System.Web.Extensions.dll")}`, source], { shell: false, windowsHide: true, encoding: "utf8", timeout: 10000 });
+  assert.equal(compiled.error, undefined); assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+  const result = childProcess.spawnSync(probe, [helper], { shell: false, windowsHide: true, encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stdout + result.stderr);
+  const response = JSON.parse(result.stdout);
+  assert.equal(response.count, 500);
+  assert.equal(response.last.index, 499);
+  assert.match(response.failure, /可见控件超过 500.*不完整匹配/);
 });

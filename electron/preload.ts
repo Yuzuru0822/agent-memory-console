@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ConsoleApi } from "../src/shared";
 const api: ConsoleApi = {
+  rewardBalancesSnapshot: () => ipcRenderer.invoke("console:rewardBalancesSnapshot"),
+  rewardBalanceBind: id => ipcRenderer.invoke("console:rewardBalanceBind", id),
+  rewardBalanceInspect: id => ipcRenderer.invoke("console:rewardBalanceInspect", id),
+  rewardBalanceNavigate: (id, token, index) => ipcRenderer.invoke("console:rewardBalanceNavigate", id, token, index),
+  rewardBalanceConfigure: (id, token, labelIndex, valueIndex, unit, intervalMinutes, lowThreshold) => ipcRenderer.invoke("console:rewardBalanceConfigure", id, token, labelIndex, valueIndex, unit, intervalMinutes, lowThreshold),
+  rewardBalanceRefresh: id => ipcRenderer.invoke("console:rewardBalanceRefresh", id),
+  rewardBalanceAutomation: (id, enabled) => ipcRenderer.invoke("console:rewardBalanceAutomation", id, enabled),
+  rewardBalanceReset: id => ipcRenderer.invoke("console:rewardBalanceReset", id),
   rewardsSnapshot: () => ipcRenderer.invoke("console:rewardsSnapshot"),
   rewardsBind: id => ipcRenderer.invoke("console:rewardsBind", id),
   rewardsInspect: id => ipcRenderer.invoke("console:rewardsInspect", id),
@@ -8,6 +16,7 @@ const api: ConsoleApi = {
   rewardsChecks: (id, token, indices, successTexts, resetHour) => ipcRenderer.invoke("console:rewardsChecks", id, token, indices, successTexts, resetHour),
   rewardsReset: id => ipcRenderer.invoke("console:rewardsReset", id),
   rewardsRun: id => ipcRenderer.invoke("console:rewardsRun", id),
+  rewardsStart: id => ipcRenderer.invoke("console:rewardsStart", id),
   rewardsAutomation: (id, enabled) => ipcRenderer.invoke("console:rewardsAutomation", id, enabled),
   rewardsRule: id => ipcRenderer.invoke("console:rewardsRule", id),
   repositorySnapshot: () => ipcRenderer.invoke("console:repositorySnapshot"),

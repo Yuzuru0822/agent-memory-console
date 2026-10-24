@@ -55,7 +55,8 @@ internal static class RewardBridge
     {
         public AutomationElement Element;
         public int Depth;
-        public Pending(AutomationElement element, int depth) { Element = element; Depth = depth; }
+        public int? ParentIndex;
+        public Pending(AutomationElement element, int depth, int? parentIndex) { Element = element; Depth = depth; ParentIndex = parentIndex; }
     }
     private sealed class ScanResult
     {
@@ -299,11 +300,31 @@ internal static class RewardBridge
         if (offscreen) return null;
         return new { index = index, name = Limit(name), automationId = Limit(id), controlType = type, enabled = enabled, actionable = actionable };
     }
+    private static object DisplayElementWithParent(int index, string name, string id, string type, bool enabled, bool actionable, bool offscreen, int? parentIndex)
+    {
+        if (offscreen) return null;
+        if (!parentIndex.HasValue) return DisplayElement(index, name, id, type, enabled, actionable, false);
+        return new { index = index, parentIndex = parentIndex.Value, name = Limit(name), automationId = Limit(id), controlType = type, enabled = enabled, actionable = actionable };
+    }
+    // A hidden or omitted parent must break the relationship. Never inherit its
+    // own parent index: the caller needs a direct, visible UIA sibling group.
+    private static int? DisplayIndex(int index, object display) { return display == null ? (int?)null : index; }
+    private static int? AppendDisplayElement(List<object> elements, string name, string id, string type, bool enabled, bool actionable, bool offscreen, int? parentIndex)
+    {
+        object display = DisplayElementWithParent(elements.Count, name, id, type, enabled, actionable, offscreen, parentIndex);
+        if (display == null) return null; // Hidden controls do not consume the visible limit.
+        if (elements.Count >= MaxElements) throw new InvalidOperationException("窗口可见控件超过 500 个，拒绝不完整匹配");
+        int? index = DisplayIndex(elements.Count, display);
+        elements.Add(display);
+        return index;
+    }
     private static ScanResult Scan(WindowTarget window, Dictionary<string, object> selector)
     {
         ScanResult result = new ScanResult(); Queue<Pending> queue = new Queue<Pending>();
-        queue.Enqueue(new Pending(Root(window), 0));
-        TreeWalker walker = TreeWalker.ControlViewWalker; int visited = 0;
+        queue.Enqueue(new Pending(Root(window), 0, null));
+        // ControlViewWalker can flatten non-control ancestors. Raw view keeps
+        // parentIndex tied to an actual direct parent, including layout groups.
+        TreeWalker walker = TreeWalker.RawViewWalker; int visited = 0;
         while (queue.Count > 0)
         {
             Pending pending = queue.Dequeue();
@@ -318,16 +339,12 @@ internal static class RewardBridge
                 ActionType(info.ControlType) && info.IsEnabled && !info.IsOffscreen && pending.Element.TryGetCurrentPattern(InvokePattern.Pattern, out pattern);
             // Hidden success labels must not become evidence for an already-claimed
             // result in the caller. Still traverse them and count duplicate selectors.
-            if (result.Elements.Count < MaxElements)
-            {
-                object display = DisplayElement(result.Elements.Count, name, id, TypeName(info.ControlType), info.IsEnabled, actionable, info.IsOffscreen);
-                if (display != null) result.Elements.Add(display);
-            }
+            int? displayIndex = AppendDisplayElement(result.Elements, name, id, TypeName(info.ControlType), info.IsEnabled, actionable, info.IsOffscreen, pending.ParentIndex);
             for (AutomationElement child = walker.GetFirstChild(pending.Element); child != null; child = walker.GetNextSibling(child))
             {
                 if (pending.Depth >= MaxDepth) throw new InvalidOperationException("窗口控件超过 30 层，拒绝不完整匹配");
                 if (visited + queue.Count >= MaxNodes) throw new InvalidOperationException("窗口控件超过 3000 个，拒绝不完整匹配");
-                queue.Enqueue(new Pending(child, pending.Depth + 1));
+                queue.Enqueue(new Pending(child, pending.Depth + 1, displayIndex));
             }
         }
         return result;

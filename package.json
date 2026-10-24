@@ -1,6 +1,6 @@
 {
   "name": "agent-memory-console",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Local Windows agent memory and skills console",
   "author": "Agent Console",
@@ -51,7 +51,12 @@
       "package.json"
     ],
     "asar": true,
-    "extraResources": [{ "from": "native/bin/RewardBridge.exe", "to": "rewards/RewardBridge.exe" }],
+    "extraResources": [
+      {
+        "from": "native/bin/RewardBridge.exe",
+        "to": "rewards/RewardBridge.exe"
+      }
+    ],
     "electronDist": "node_modules/electron/dist",
     "win": {
       "target": [

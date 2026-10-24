@@ -11,13 +11,14 @@ export interface RewardsBridge {
   inspect(executable: string, windowTitle?: string): Promise<{ title: string; elements: RewardElement[] }>;
   invoke(executable: string, windowTitle: string, selector: RewardSelector, expectedContext?: string[]): Promise<void>;
 }
+export type RewardBalanceObserver = (id: RewardId, reason: "before_claim" | "after_claim") => Promise<void>;
 interface RecordState { state: RewardState; message: string; attempt?: string; success?: string; window?: string; next?: string }
 interface Stored { version: 1; profiles: Partial<Record<RewardId, RewardProfile>>; states: Partial<Record<RewardId, RecordState>>; logs: RewardLog[] }
 interface Observed { id: RewardId; profileHash: string; at: number; view: RewardObservation }
 const selectorOf = (element: RewardSelector): RewardSelector => ({ name: element.name, automationId: element.automationId, controlType: element.controlType });
 const selectorEqual = (a: RewardSelector, b: RewardSelector) => a.name === b.name && a.automationId === b.automationId && a.controlType === b.controlType;
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-const forbidden = /购买|充值|支付|订阅|续费|升级|重置|删除|移除|发送|发布|邀请|分享|授权|注销|退出|安全|权限|密码|验证码|purchase|payment|checkout|subscribe|upgrade|reset|delete|remove|send|publish|invite|share|password|permission|logout/i;
+const forbidden = /购买|充值|支付|订阅|续费|升级|重置|兑换|核销|消耗|扣除|删除|移除|发送|发布|邀请|分享|授权|注销|退出|安全|权限|密码|验证码|purchase|payment|checkout|subscribe|upgrade|reset|redeem|consume|spend|\bbuy\b|delete|remove|send|publish|invite|share|password|permission|logout/i;
 const claimLabel = /签到|领取|\bclaim\b|\bcheck[ -]?in\b/i;
 const successLabel = /^(今日已签到|今日已领取|今日已领|已签到|已领取|签到成功|领取成功|Already claimed|Claimed|Claim successful|Successfully claimed|Checked in|Check-in successful)[!！。.]?$/i;
 const maxConfig = 2 * 1024 * 1024;
@@ -35,7 +36,7 @@ export class RewardsService {
   private running?: RewardId;
   private calibratingUntil = 0;
   private readonly file: string;
-  constructor(private console: ConsoleService, private bridge: RewardsBridge, private now = () => Date.now(), private delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))) {
+  constructor(private console: ConsoleService, private bridge: RewardsBridge, private now = () => Date.now(), private delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)), private balanceObserver?: RewardBalanceObserver) {
     this.file = path.join(console.storage, "rewards.json"); noLinks(this.file);
     if (fs.existsSync(this.file)) {
       if (fs.statSync(this.file).size > maxConfig) throw new Error("积分设置文件过大");
@@ -174,22 +175,39 @@ export class RewardsService {
     this.data.logs.push({ at, provider: id, state, message }); this.data.logs = this.data.logs.slice(-200); this.save();
     this.console.audit("rewards.result", `${id} · ${state} · ${message}`);
   }
+  private async observeBalance(id: RewardId, reason: "before_claim" | "after_claim") {
+    // A failed balance read cannot turn a verified claim into a retryable failure.
+    try { await this.balanceObserver?.(id, reason); } catch { /* Balance service retains its own stale/error state. */ }
+  }
+  async start(id: RewardId): Promise<{message: string}> {
+    const result = await this.run(id);
+    if (!this.profile(id).validated || !["claimed", "already_claimed"].includes(this.data.states[id]?.state || ""))
+      return {message: `${result.message}；尚未开启自动领取，请按提示处理后重新验证。`};
+    this.automation(id, true);
+    return {message: "领取流程已验证，自动领取已开启；以后按平台周期执行并刷新已配置的余额。"};
+  }
   async run(id: RewardId): Promise<{ message: string }> {
     this.writable(); if (this.running) throw new Error("已有领取流程正在执行");
     if (this.data.states[id]?.state === "unknown") throw new Error("上次领取结果未知，请在客户端核对后重新校准活动，再进行试领");
     const p = this.profile(id); if (!p.claim || !p.context.length || !p.successTexts.length || !p.windowTitle) throw new Error("请先记录领取按钮、活动上下文与成功状态");
-    this.running = id; this.observations.clear(); this.calibratingUntil = 0; let submitted = false;
+    this.running = id; this.observations.clear(); this.calibratingUntil = 0; let submitted = false, observedCompletion = false;
     try {
       this.validateExecutable(p);
+      await this.observeBalance(id, "before_claim");
       let view = await this.bridge.inspect(p.executable, p.windowTitle);
       // If already on the reward panel, do not toggle navigation menus closed.
-      if (!this.hasContext(view.elements, p)) for (const step of p.navigation) {
+      let navigationStart = 0;
+      for (let i = p.navigation.length - 1; i >= 0; i--) {
+        const matches = view.elements.filter(e => selectorEqual(e, p.navigation[i]));
+        if (matches.length === 1 && matches[0].enabled && matches[0].actionable) { navigationStart = i; break; }
+      }
+      if (!this.hasContext(view.elements, p)) for (const step of p.navigation.slice(navigationStart)) {
         this.requireUnique(view.elements, step); await this.bridge.invoke(p.executable, p.windowTitle, step); await this.delay(350);
         view = await this.bridge.inspect(p.executable, p.windowTitle);
         if (this.hasContext(view.elements, p)) break;
       }
       if (!this.hasContext(view.elements, p)) throw new Error("未找到已校准的活动上下文，请打开正确活动或重新校准");
-      if (this.hasSuccess(view.elements, p)) { this.recordResult(id, "already_claimed", "平台显示本活动已领取；本次未点击领取", true); return { message: "平台显示已领取" }; }
+      if (this.hasSuccess(view.elements, p)) { this.recordResult(id, "already_claimed", "平台显示本活动已领取；本次未点击领取", true); observedCompletion = true; return { message: "平台显示已领取" }; }
       this.requireUnique(view.elements, p.claim);
       this.writable(); this.validateExecutable(p);
       // Persist an uncertain marker BEFORE the external effect. A crash/restart
@@ -201,7 +219,7 @@ export class RewardsService {
         await this.delay(650); view = await this.bridge.inspect(p.executable, p.windowTitle);
         if (this.hasContext(view.elements, p) && this.hasSuccess(view.elements, p)) {
           if (rewardWindow(submittedAt, p.resetHour) !== rewardWindow(this.now(), p.resetHour)) throw new Error("领取核验跨越活动刷新时间，请在客户端确认所属领取窗口");
-          p.validated = true; this.recordResult(id, "claimed", "平台活动上下文中出现明确领取成功状态", true, submittedAt); return { message: "领取已核验成功，可启用自动领取" };
+          p.validated = true; this.recordResult(id, "claimed", "平台活动上下文中出现明确领取成功状态", true, submittedAt); observedCompletion = true; return { message: "领取已核验成功，可启用自动领取" };
         }
       }
       throw new Error("未观察到明确成功状态；请在客户端核对后再操作");
@@ -210,7 +228,10 @@ export class RewardsService {
       if (submitted) { p.enabled = false; p.validated = false; }
       this.recordResult(id, submitted ? "unknown" : "needs_attention", message);
       return { message };
-    } finally { this.running = undefined; }
+    } finally {
+      if (submitted || observedCompletion) await this.observeBalance(id, "after_claim");
+      this.running = undefined;
+    }
   }
   async tick() {
     if (this.running || this.now() < this.calibratingUntil) return;

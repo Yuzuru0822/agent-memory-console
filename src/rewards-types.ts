@@ -9,6 +9,7 @@ export interface RewardSelector {
 }
 export interface RewardElement extends RewardSelector {
   index: number;
+  parentIndex?: number;
   enabled: boolean;
   actionable: boolean;
 }
@@ -68,6 +69,7 @@ export interface RewardsApi {
   rewardsChecks(id: RewardId, token: string, contextIndices: number[], successTexts: string[], resetHour: number): Promise<Result>;
   rewardsReset(id: RewardId): Promise<Result>;
   rewardsRun(id: RewardId): Promise<Result>;
+  rewardsStart(id: RewardId): Promise<Result>;
   rewardsAutomation(id: RewardId, enabled: boolean): Promise<Result>;
   rewardsRule(id: RewardId): Promise<Result>;
 }

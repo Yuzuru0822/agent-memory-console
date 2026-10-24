@@ -32,11 +32,14 @@ function inspection(response: Record<string, unknown>): Inspection {
   if (!Array.isArray(response.elements) || response.elements.length > 500) throw new Error("Windows 奖励桥控件列表无效");
   const indices = new Set<number>();
   const elements = response.elements.map(value => {
-    const item = object(value); keys(item, ["index", "name", "automationId", "controlType", "enabled", "actionable"]);
+    const item = object(value); keys(item, ["index", "parentIndex", "name", "automationId", "controlType", "enabled", "actionable"]);
     if (!Number.isInteger(item.index) || (item.index as number) < 0 || (item.index as number) >= 500 || indices.has(item.index as number) || typeof item.enabled !== "boolean" || typeof item.actionable !== "boolean")
       throw new Error("Windows 奖励桥控件字段无效");
+    if (Object.hasOwn(item, "parentIndex") && (!Number.isInteger(item.parentIndex) || (item.parentIndex as number) < 0 || (item.parentIndex as number) >= (item.index as number) || !indices.has(item.parentIndex as number)))
+      throw new Error("Windows 奖励桥父控件关联无效");
     indices.add(item.index as number);
     const element: RewardElement = { index: item.index as number, name: text(item.name, 300), automationId: text(item.automationId, 300), controlType: text(item.controlType, 50), enabled: item.enabled, actionable: item.actionable };
+    if (Object.hasOwn(item, "parentIndex")) element.parentIndex = item.parentIndex as number;
     if (element.controlType === "Edit" || !element.controlType || (element.actionable && (!element.enabled || !ACTION_TYPES.has(element.controlType) || (!element.name && !element.automationId)))) throw new Error("Windows 奖励桥返回了不允许的控件");
     return element;
   });

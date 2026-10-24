@@ -26,6 +26,8 @@ import type {
   RewardsSnapshot,
   RewardView,
 } from "./rewards-types";
+import type { BalancesSnapshot } from "./rewards-balance-types";
+import RewardBalancePanel, { BalanceSummary } from "./RewardBalancePanel";
 import "./rewards.css";
 
 const api = window.consoleApi;
@@ -74,7 +76,10 @@ function StateBadge({ state }: { state: RewardState }) {
 
 export default function RewardsPanel() {
   const [snapshot, setSnapshot] = useState<RewardsSnapshot>();
+  const [balances, setBalances] = useState<BalancesSnapshot>();
+  const [balanceUnavailable, setBalanceUnavailable] = useState(false);
   const [selectedId, setSelectedId] = useState<RewardId>();
+  const [selectedBalanceId, setSelectedBalanceId] = useState<RewardId>();
   const [loading, setLoading] = useState(false);
   const [pending, setPending] = useState<{ id: RewardId; action: string }>();
   const [notice, setNotice] = useState<{ text: string; error: boolean }>();
@@ -99,8 +104,13 @@ export default function RewardsPanel() {
     const operation = (async () => {
       if (mounted.current) setLoading(true);
       try {
-        const next = await api.rewardsSnapshot();
-        if (mounted.current) setSnapshot(next);
+        const [rewardsResult, balanceResult] = await Promise.allSettled([api.rewardsSnapshot(), api.rewardBalancesSnapshot()]);
+        if (mounted.current) {
+          if (rewardsResult.status === "fulfilled") setSnapshot(rewardsResult.value);
+          else setNotice({ text: errorText(rewardsResult.reason), error: true });
+          if (balanceResult.status === "fulfilled") { setBalances(balanceResult.value); setBalanceUnavailable(false); }
+          else setBalanceUnavailable(true);
+        }
       } catch (error) {
         if (mounted.current) setNotice({ text: errorText(error), error: true });
       } finally {
@@ -146,7 +156,14 @@ export default function RewardsPanel() {
     if (operationRunning.current) return;
     clearObservation();
     setSelectedId(id);
+    setSelectedBalanceId(undefined);
     initializedId.current = undefined;
+  }
+  function selectBalance(id: RewardId) {
+    if (operationRunning.current) return;
+    clearObservation();
+    setSelectedId(undefined);
+    setSelectedBalanceId(id);
   }
   function acceptObservation(value: RewardObservation) {
     setObservation(value);
@@ -159,7 +176,7 @@ export default function RewardsPanel() {
     action: string,
     task: () => Promise<Result | void>,
   ) {
-    if (operationRunning.current || !api) return;
+    if (operationRunning.current || snapshot?.running || balances?.running || !api) return;
     operationRunning.current = true;
     setPending({ id, action });
     setNotice(undefined);
@@ -212,7 +229,8 @@ export default function RewardsPanel() {
   }
 
   const unavailable = !snapshot?.nativeAvailable;
-  const busy = !!pending || !!snapshot?.running;
+  const busy = !!pending || !!snapshot?.running || !!balances?.running;
+  const balanceProvider = snapshot?.providers.find(provider => provider.id === selectedBalanceId);
   const canOperate = current?.kind === "ui" && !unavailable && !busy;
   const contextCandidates = observation?.elements.filter((element) => element.controlType === "Text" && element.name.trim()) || [];
   const actionableElements = observation?.elements.filter((element) =>
@@ -228,7 +246,7 @@ export default function RewardsPanel() {
     <div className="page-heading rewards-heading">
       <div>
         <h2><Gift size={22} />积分福利</h2>
-        <p>集中查看各平台的免费权益，按已验证的客户端流程领取。</p>
+        <p>自动领取已验证的免费权益，持续查看各平台的真实余额。</p>
       </div>
       <button disabled={loading} onClick={() => void refresh()}>
         <RefreshCw size={14} className={loading ? "spin" : ""} />刷新状态
@@ -246,7 +264,8 @@ export default function RewardsPanel() {
       <div>
         <strong>只有平台明确显示成功，才记为已领取</strong>
         <p>打开客户端或登录页面不等于领取成功。校准时必须包含活动标题与免费奖励上下文，不录入账户、验证码或会话正文；不录制购买、邀请或消耗额度的操作。</p>
-        <p>自动领取仅在本控制台运行时执行。请保持 Windows 解锁；界面变化、验证码或登录失效时，需要人工处理后重新校准。</p>
+        <p>开启自动领取后，控制台按日检查，并在领取成功后读取已配置的余额。余额变化可能包含消耗或过期，不能单独证明奖励到账。</p>
+        <p>请保持本控制台及目标客户端打开、窗口可见、Windows 解锁；界面变化、验证码或登录失效时，需要人工处理后重新校准。</p>
       </div>
     </section>
 
@@ -261,8 +280,9 @@ export default function RewardsPanel() {
         <LoaderCircle size={16} className="spin" />
         正在执行 {snapshot.providers.find((provider) => provider.id === snapshot.running)?.name || snapshot.running} 的已录流程，请勿切换该客户端页面。
       </div>}
+      {balances?.running && <div className="rewards-running" role="status"><LoaderCircle size={16} className="spin" />正在读取 {snapshot.providers.find(provider => provider.id === balances.running)?.name || balances.running} 的余额，请勿切换该客户端页面。</div>}
       <div className="rewards-platform-grid">
-        {snapshot.providers.map((provider) => <article className={`reward-card ${selectedId === provider.id ? "is-selected" : ""}`} key={provider.id} data-reward-id={provider.id}>
+        {snapshot.providers.map((provider) => <article className={`reward-card ${selectedId === provider.id || selectedBalanceId === provider.id ? "is-selected" : ""}`} key={provider.id} data-reward-id={provider.id}>
           <div className="reward-card-heading"><h3>{provider.name}</h3><StateBadge state={provider.state} /></div>
           <span className={`reward-kind kind-${provider.kind}`}>{kinds[provider.kind].title}</span>
           <p className="reward-description">{provider.description}</p>
@@ -274,9 +294,11 @@ export default function RewardsPanel() {
             <div><dt>成功记录</dt><dd>{formatTime(provider.lastSuccess)}</dd></div>
             {provider.kind === "ui" && <div><dt>下次检查</dt><dd>{formatTime(provider.nextCheck)}</dd></div>}
           </dl>
+          <BalanceSummary balance={balances?.providers.find(item => item.id === provider.id)} unavailable={balanceUnavailable} />
           <div className="reward-card-actions">
-            <button className="ghost small" disabled={!!pending} onClick={() => void run(provider.id, "打开官方规则", () => api!.rewardsRule(provider.id))}><ArrowUpRight size={13} />官方规则</button>
+            <button className="ghost small" disabled={busy} onClick={() => void run(provider.id, "打开官方规则", () => api!.rewardsRule(provider.id))}><ArrowUpRight size={13} />官方规则</button>
             {provider.kind === "ui" && <button className="small" disabled={busy} onClick={() => selectProvider(provider.id)}><Settings2 size={13} />{provider.profile ? "管理领取流程" : "校准领取流程"}</button>}
+            <button className="small" disabled={busy} onClick={() => selectBalance(provider.id)}><Settings2 size={13} />配置余额监控</button>
           </div>
           <span className="reward-source" title={provider.sourceUrl}>{provider.sourceUrl}</span>
           {provider.kind === "ui" && <div className="reward-auto-status">自动领取：{provider.profile?.enabled ? "已开启" : "未开启"} · {provider.profile?.validated ? "流程已验证" : "尚未验证"}</div>}
@@ -316,7 +338,7 @@ export default function RewardsPanel() {
           <div className="reward-calibration-columns">
             <div className="reward-controls">
               <h3>1. 记录导航或领取按钮</h3>
-              <p className="secondary">选择可点击控件。导航会立即执行一次；记录领取按钮只保存选择，稍后由“手动试领”执行。</p>
+              <p className="secondary">选择可点击控件。导航会立即执行一次；记录领取按钮只保存选择，稍后由试领或自动领取执行。</p>
               <input className="reward-input" aria-label="筛选可点击控件" placeholder="搜索当前窗口的按钮文字…" value={elementQuery} onChange={(event) => setElementQuery(event.target.value)} />
               <div className="reward-element-list" role="radiogroup" aria-label="可点击控件">
                 {actionableElements.length ? actionableElements.map((element) => <label className={`reward-element ${elementIndex === element.index ? "is-selected" : ""}`} key={element.index}>
@@ -354,6 +376,10 @@ export default function RewardsPanel() {
               clearObservation();
               void run(current.id, "手动试领", () => api!.rewardsRun(current.id));
             }}><Play size={14} />手动试领</button>
+            <button className="primary" disabled={!canOperate || current.state === "unknown" || !!current.profile?.enabled || !current.profile?.claim || !current.profile.context.length || !current.profile.successTexts.length} onClick={() => {
+              clearObservation();
+              void run(current.id, "验证并开启自动领取", () => api!.rewardsStart(current.id));
+            }}><ShieldCheck size={14} />验证并开启自动领取</button>
             <button disabled={busy || !current.profile} onClick={() => {
               clearObservation();
               void run(current.id, "清空已录流程", async () => {
@@ -371,6 +397,8 @@ export default function RewardsPanel() {
         </div>
         {pending?.id === current.id && <p className="reward-pending" role="status"><LoaderCircle size={14} className="spin" />正在{pending.action}…</p>}
       </section>}
+
+      {balanceProvider && <RewardBalancePanel key={balanceProvider.id} provider={balanceProvider} balance={balances?.providers.find(item => item.id === balanceProvider.id)} busy={busy} nativeAvailable={!!balances?.nativeAvailable && !balanceUnavailable} pendingAction={pending?.id === balanceProvider.id ? pending.action : undefined} run={run} />}
 
       <section className="panel rewards-log" aria-label="积分福利活动日志">
         <div className="section-title"><span><History size={18} />福利活动日志</span><small>{snapshot.logs.length} 条记录</small></div>

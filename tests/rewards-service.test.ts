@@ -2,7 +2,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { RewardsService, rewardWindow, nextRewardWindow, type RewardsBridge } from "../electron/rewards-service";
+import { RewardsService, rewardWindow, nextRewardWindow, type RewardsBridge, type RewardBalanceObserver } from "../electron/rewards-service";
 import type { RewardElement, RewardId, RewardSelector } from "../src/rewards-types";
 import { fixture, peFixture } from "./helpers";
 
@@ -41,15 +41,15 @@ class FakeBridge implements RewardsBridge {
   }
 }
 
-function setup(t: TestContext) {
+function setup(t: TestContext, observer?: RewardBalanceObserver) {
   const f = fixture(t), bridge = new FakeBridge(), executable = f.file("fake-client/Client.exe", peFixture());
   let now = Date.parse("2026-10-24T02:01:00.000Z");
   const waits: number[] = [];
   const delay = async (ms: number) => { waits.push(ms); };
-  const rewards = new RewardsService(f.service, bridge, () => now, delay);
+  const rewards = new RewardsService(f.service, bridge, () => now, delay, observer);
   return { ...f, bridge, executable, rewards, waits, now: () => now,
     advance: (ms: number) => { now += ms; },
-    restart: () => new RewardsService(f.service, bridge, () => now, delay),
+    restart: () => new RewardsService(f.service, bridge, () => now, delay, observer),
   };
 }
 type Setup = ReturnType<typeof setup>;
@@ -404,4 +404,83 @@ test("a success label on an unrelated page cannot skip required activity context
   assert.equal(provider(f).state, "needs_attention");
   assert.equal(provider(f).profile?.validated, false);
   assert.equal(f.bridge.invocations.length, 0);
+});
+
+test("start enables and persists automatic claiming only after verified claim success", async t => {
+  const f = setup(t); await calibrate(f); const result = await f.rewards.start("qoder");
+  assert.match(result.message, /自动领取已开启/); assert.equal(provider(f).state, "claimed"); assert.equal(provider(f).profile?.validated, true); assert.equal(provider(f).profile?.enabled, true);
+  assert.equal(f.bridge.invocations.length, 1); assert.equal(f.restart().snapshot().providers.find(p => p.id === "qoder")?.profile?.enabled, true);
+  await f.rewards.tick(); assert.equal(f.bridge.invocations.length, 1);
+});
+
+test("start does not enable a first flow just because the account already claimed", async t => {
+  const f = setup(t); await calibrate(f); f.bridge.current = completed(); const result = await f.rewards.start("qoder");
+  assert.match(result.message, /尚未开启/); assert.equal(provider(f).state, "already_claimed"); assert.equal(provider(f).profile?.enabled, false); assert.equal(provider(f).profile?.validated, false); assert.equal(f.bridge.invocations.length, 0);
+});
+
+test("start leaves unknown submission paused and cannot trigger a second submission", async t => {
+  const f = setup(t); await calibrate(f); f.bridge.onInvoke = () => {};
+  const result = await f.rewards.start("qoder"); assert.match(result.message, /尚未开启/); assert.equal(provider(f).state, "unknown"); assert.equal(provider(f).profile?.enabled, false);
+  await assert.rejects(f.rewards.start("qoder"), /结果未知/); f.advance(86400000); await f.rewards.tick(); assert.equal(f.bridge.invocations.length, 1);
+});
+
+test("a previously verified flow can restart automation from an already-claimed panel", async t => {
+  const f = setup(t); await validated(f); f.rewards.automation("qoder", false); f.bridge.current = completed();
+  await f.rewards.start("qoder"); assert.equal(provider(f).state, "already_claimed"); assert.equal(provider(f).profile?.enabled, true); assert.equal(f.bridge.invocations.length, 0);
+});
+
+test("balance observations bracket claim submission and success, with persisted result available afterwards", async t => {
+  const events: string[] = []; let observedState: string | undefined;
+  const f = setup(t, async (id, reason) => { assert.equal(id, "qoder"); events.push(reason); if (reason === "after_claim") observedState = provider(f).state; });
+  await calibrate(f);
+  f.bridge.onInspect = () => { events.push("inspect"); return f.bridge.current; };
+  f.bridge.onInvoke = () => { events.push("claim"); f.bridge.current = completed(); };
+  await f.rewards.run("qoder");
+  assert.deepEqual(events, ["before_claim", "inspect", "claim", "inspect", "after_claim"]); assert.equal(observedState, "claimed"); assert.equal(provider(f).state, "claimed");
+});
+
+test("balance observation failures cannot erase claim success or lead to a repeated daily submission", async t => {
+  const observations: string[] = [];
+  const f = setup(t, async (_id, reason) => { observations.push(reason); throw new Error("余额不可读"); });
+  await calibrate(f); await f.rewards.start("qoder");
+  assert.deepEqual(observations, ["before_claim", "after_claim"]); assert.equal(provider(f).state, "claimed"); assert.equal(provider(f).profile?.validated, true); assert.equal(provider(f).profile?.enabled, true);
+  await f.rewards.tick(); await f.rewards.tick(); assert.equal(f.bridge.invocations.length, 1); assert.equal(observations.length, 2);
+  const restarted = f.restart(); await restarted.tick(); assert.equal(f.bridge.invocations.length, 1); assert.equal(restarted.snapshot().providers.find(p => p.id === "qoder")?.state, "claimed");
+});
+
+test("scheduler invokes balance observers around each due window only", async t => {
+  const observations: string[] = []; const f = setup(t, async (_id, reason) => { observations.push(reason); });
+  await calibrate(f); await f.rewards.start("qoder"); observations.length = 0;
+  await f.rewards.tick(); assert.deepEqual(observations, []);
+  f.advance(86400000); f.bridge.current = panel(); await f.rewards.tick();
+  assert.deepEqual(observations, ["before_claim", "after_claim"]); assert.equal(f.bridge.invocations.length, 2);
+  await f.rewards.tick(); assert.equal(observations.length, 2); assert.equal(f.bridge.invocations.length, 2);
+});
+
+test("unknown submissions still get an after-claim balance read without validating the claim", async t => {
+  const observations: string[] = []; const f = setup(t, async (_id, reason) => { observations.push(reason); });
+  await calibrate(f); f.bridge.onInvoke = () => {}; await f.rewards.run("qoder");
+  assert.deepEqual(observations, ["before_claim", "after_claim"]); assert.equal(provider(f).state, "unknown"); assert.equal(provider(f).profile?.validated, false); assert.equal(provider(f).profile?.enabled, false);
+});
+
+test("the reward UI lock remains held until the after-claim observer finishes", async t => {
+  const entered = deferred<void>(), release = deferred<void>();
+  const f = setup(t, async (_id, reason) => { if (reason === "after_claim") { entered.resolve(); await release.promise; } });
+  await calibrate(f); const active = f.rewards.start("qoder"); await entered.promise;
+  try {
+    assert.equal(provider(f).state, "claimed"); assert.equal(f.rewards.snapshot().running, "qoder"); await assert.rejects(f.rewards.run("qoder"), /正在执行/);
+    await f.rewards.tick(); assert.equal(f.bridge.invocations.length, 1);
+  } finally { release.resolve(); await active; }
+  assert.equal(f.rewards.snapshot().running, undefined); assert.equal(provider(f).profile?.enabled, true);
+});
+
+test("an expanded account menu resumes from the later visible reward step instead of toggling avatar", async t => {
+  const f = setup(t), avatar = element(10, "我的账户", "Button", "avatar"); f.rewards.bind("workbuddy", f.executable);
+  f.bridge.current = { title, elements: [avatar] }; f.bridge.onInvoke = () => { f.bridge.current = { title, elements: [avatar, navigation] }; };
+  let o = await f.rewards.inspect("workbuddy"); await f.rewards.record("workbuddy", o.token, avatar.index, "navigate");
+  f.bridge.onInvoke = () => { f.bridge.current = panel(); }; o = await f.rewards.inspect("workbuddy"); await f.rewards.record("workbuddy", o.token, navigation.index, "navigate");
+  o = await f.rewards.inspect("workbuddy"); await f.rewards.record("workbuddy", o.token, claim.index, "claim");
+  o = await f.rewards.inspect("workbuddy"); f.rewards.checks("workbuddy", o.token, [0], ["今日已领取", "领取成功"], 0);
+  f.bridge.current = { title, elements: [avatar, navigation] }; f.bridge.onInvoke = undefined; f.bridge.invocations = [];
+  await f.rewards.run("workbuddy"); assert.deepEqual(f.bridge.invocations.map(v => v.selector.name), ["Buddy 加油站", "领取"]); assert.equal(provider(f, "workbuddy").state, "claimed");
 });

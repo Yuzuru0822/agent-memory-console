@@ -91,6 +91,12 @@ const path = require('node:path');
     await page.getByRole('button', { name: '积分福利', exact: true }).click();
     await page.locator('[data-reward-id]').first().waitFor();
     assert.equal(await page.locator('[data-reward-id]').count(), rewards.providers.length);
+    const balances = await page.evaluate(() => window.consoleApi.rewardBalancesSnapshot());
+    assert.equal(balances.nativeAvailable, true);
+    assert.equal(balances.providers.length, 9);
+    assert.ok(balances.providers.every(provider => !provider.profile && !provider.sample && !provider.low && provider.status === 'unconfigured'), 'fresh package must never invent balances or monitoring grants');
+    assert.equal(await page.locator('[data-balance-id]').count(), 9);
+    assert.equal(await page.getByRole('button', {name:'配置余额监控', exact:true}).count(), 9);
     for (const provider of rewards.providers) {
       const card = page.locator(`[data-reward-id="${provider.id}"]`);
       assert.equal(provider.profile, undefined, 'agent discovery must never authorize or configure reward actions');
