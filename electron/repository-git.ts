@@ -22,11 +22,26 @@ function locked<T>(root: string, run: () => Promise<T>): Promise<T> {
   return operation;
 }
 
+function gitMetadataName(name: string): "directory" | "alias" | undefined {
+  if (name.toLowerCase() === ".git") return "directory";
+  // Match Git's NTFS/HFS reserved-name checks, including short-name aliases.
+  const normalized = name.replace(/[\u200C-\u200F\u202A-\u202E\u206A-\u206F\uFEFF]/g, "")
+    .split(":")[0].toLowerCase().replace(/[. ]+$/, "");
+  return normalized === ".git" || /^\.?git~[1-9]$/.test(normalized) ? "alias" : undefined;
+}
+
+/** These directories are preserved as opaque skill data, never opened by central Git. */
+function nestedSkillGit(root: string, full: string): boolean {
+  const relative = path.relative(root, full).split(path.sep);
+  return relative[0]?.toLowerCase() === "skills" &&
+    relative.slice(1).some(part => gitMetadataName(part) === "directory");
+}
+
 function relativeFile(value: string): string {
   if (typeof value !== "string" || !value || value.length > 2000 || /[\\:\0]/.test(value) || value.startsWith("/"))
     throw new Error(`仓库文件路径无效：${value}`);
   const parts = value.split("/");
-  if (parts.some(p => !p || p === "." || p === ".." || /[. ]$/.test(p) || /^\.git$/i.test(p) ||
+  if (parts.some(p => !p || p === "." || p === ".." || /[. ]$/.test(p) || gitMetadataName(p) ||
       /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p)))
     throw new Error(`仓库文件路径无效：${value}`);
   return value;
@@ -52,6 +67,11 @@ function confinedFs(root: string) {
     if (!within(root, full)) throw new Error("Git 操作越出仓库路径，已拒绝");
     if (write && !within(path.join(root, ".git"), full)) throw new Error("Git 只能写入本仓库的 .git 元数据");
     noLinks(full);
+    if (nestedSkillGit(root, full)) {
+      // isomorphic-git treats ENOENT as absent. Its statusMatrix(ignored:true)
+      // and add(force:true) bypass ignore rules, so an ignore file is insufficient.
+      throw Object.assign(new Error("内层 Git 元数据不属于中央 Git 的读写范围"), { code: "ENOENT" });
+    }
     return full;
   };
   const promises = {
@@ -76,13 +96,14 @@ function confinedFs(root: string) {
     },
     unlink: async (input: fs.PathLike) => fs.unlinkSync(check(input, true)),
     readdir: async (input: fs.PathLike) => {
-      const dir = fs.opendirSync(check(input));
+      const full = check(input), dir = fs.opendirSync(full);
       const entries: string[] = [];
       try {
         let entry: fs.Dirent | null;
         while ((entry = dir.readSync())) {
           if (entries.length >= MAX_ENTRIES) throw new Error("仓库单目录条目过多");
           if (entry.isSymbolicLink()) throw new Error("仓库内部不能包含链接或 junction");
+          if (nestedSkillGit(root, path.join(full, entry.name))) continue;
           entries.push(entry.name);
         }
       } finally { dir.closeSync(); }
@@ -112,9 +133,13 @@ function scan(root: string): void {
         const full = path.join(dir, entry.name);
         const stat = fs.lstatSync(full);
         if (stat.isSymbolicLink()) throw new Error("仓库内部不能包含链接或 junction");
+        const metadataName = gitMetadataName(entry.name);
+        if (metadataName === "alias") throw new Error("仓库包含 .git 别名，已拒绝导入");
+        if (metadataName === "directory" && nestedSkillGit(root, full) && !stat.isDirectory())
+          throw new Error("技能内的 .git 必须是完整普通目录，不支持 worktree 指针文件");
         if (stat.isDirectory()) walk(full, depth + 1);
         else if (stat.isFile()) {
-          const limit = within(path.join(root, ".git"), full) ? MAX_GIT_FILE : MAX_FILE;
+          const limit = within(path.join(root, ".git"), full) || nestedSkillGit(root, full) ? MAX_GIT_FILE : MAX_FILE;
           if (stat.size > limit || (total += stat.size) > MAX_TOTAL)
             throw new Error("仓库超过文件或总大小上限（普通文件 32 MiB，总计 512 MiB）");
         } else throw new Error("仓库只允许普通文件和目录");

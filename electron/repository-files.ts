@@ -59,7 +59,9 @@ export function inventory(root: string, options: { links?: boolean; memory?: boo
       let entry: fs.Dirent | null;
       while ((entry = directory.readSync())) {
         if (++entries > 20000) throw new Error("目录超过 20000 个条目");
-        if (entry.name.toLowerCase() === ".git") throw new Error("记忆或技能内不允许嵌套 Git 仓库");
+        // A skill can be a Git working tree. Its operational metadata belongs to
+        // that repository and is carried by migration, never by file merging.
+        if (entry.name.toLowerCase() === ".git") continue;
         if (options.memory && ["node_modules", "dist", "build"].includes(entry.name)) continue;
         const child = path.join(logical, entry.name), target = resolve(child), stat = fs.lstatSync(target);
         if (stat.isDirectory()) walk(child, depth + 1, ancestors);

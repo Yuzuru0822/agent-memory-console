@@ -3,6 +3,7 @@ const { _electron: electron } = require("playwright");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const git = require("isomorphic-git");
 
 (async () => {
   const project = path.resolve(__dirname, "..");
@@ -42,6 +43,12 @@ const path = require("node:path");
     "// Data fixture only; never execute this skill.\n",
   );
   write(path.join(home, ".workbuddy", "MEMORY.md"), "# Legacy single file\n");
+  const gitSkill = path.dirname(localSkill);
+  await git.init({ fs, dir: gitSkill, defaultBranch: "skill-main" });
+  await git.add({ fs, dir: gitSkill, filepath: "SKILL.md" });
+  const skillOid = await git.commit({ fs, dir: gitSkill, message: "Skill repository fixture", author: { name: "Fixture", email: "fixture@example.invalid" } });
+  await git.setConfig({ fs, dir: gitSkill, path: "remote.origin.url", value: "https://example.invalid/fixture.git" });
+  const gitConfig = read(path.join(gitSkill, ".git", "config"));
   write(
     configFile,
     JSON.stringify(
@@ -298,6 +305,8 @@ const path = require("node:path");
       .click();
     const linkPreview = page.getByRole("region", { name: "技能连接预览" });
     await linkPreview.waitFor();
+    assert.match(await linkPreview.innerText(), /完整保留 Git 仓库/);
+    assert.equal((await linkPreview.innerText()).includes("https://example.invalid/fixture.git"), false, "Git config contents must not be included in migration previews");
     const linkApply = linkPreview.getByRole("button", {
       name: "确认导入并连接技能",
       exact: true,
@@ -319,6 +328,9 @@ const path = require("node:path");
       path.join(repository, "skills").toLowerCase(),
     );
     assert.equal(read(repoSkill), "# Agent skill choice\n");
+    assert.equal((await git.log({ fs, dir: path.dirname(repoSkill) }))[0].oid, skillOid);
+    assert.equal(read(path.join(path.dirname(repoSkill), ".git", "config")), gitConfig);
+    assert.equal((await git.listFiles({ fs, dir: repository })).some(file => file.split("/").includes(".git")), false);
     assert.equal(
       read(path.join(linked.originalBackup, "review", "SKILL.md")),
       "# Agent skill choice\n",
@@ -342,6 +354,8 @@ const path = require("node:path");
     );
     assert.equal(fs.lstatSync(skills).isSymbolicLink(), false);
     assert.equal(read(localSkill), "# Agent skill choice\n");
+    assert.equal((await git.log({ fs, dir: gitSkill }))[0].oid, skillOid);
+    assert.equal(read(path.join(gitSkill, ".git", "config")), gitConfig);
     assert.ok(
       fs.existsSync(path.join(repository, "skills", "new-shared", "SKILL.md")),
       "unlink must preserve the repository",

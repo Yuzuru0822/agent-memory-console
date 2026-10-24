@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import git from "isomorphic-git";
 import { fixture } from "./helpers";
 import { commitRepository, initRepository, readRevision, REPOSITORY_MARKER, repositoryHistory, repositoryStatus } from "../electron/repository-git";
@@ -167,4 +168,100 @@ test("an index containing a Git symlink is rejected even when no disk link exist
   const oid = await git.writeBlob({ fs, dir: root, blob: Buffer.from("../../outside") });
   await git.updateIndex({ fs, dir: root, filepath: "skills/unsafe-link", oid, mode: 0o120000, add: true });
   await assert.rejects(commitRepository(root, "reject staged link"), /链接|非普通/);
+});
+
+function metadataSnapshot(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  const walk = (directory: string) => {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const file = path.join(directory, name);
+      if (fs.statSync(file).isDirectory()) walk(file);
+      else files[path.relative(root, file).split(path.sep).join("/")] = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    }
+  };
+  walk(root);
+  return files;
+}
+
+for (const destination of ["skills", "skills/imported-bundle"]) {
+  test(`central Git tracks work files and preserves opaque metadata for a copied ${destination}/.git repository`, async t => {
+    const { dir, file, root: fixtureRoot } = fixture(t), root = dir("repository"), source = dir("source-skill");
+    await initRepository(root);
+    await git.init({ fs, dir: source, defaultBranch: "main" });
+    const text = "# Local Git skill\r\nKeep exact working-tree bytes.\r\n";
+    const asset = Buffer.from([0, 255, 128, 17]);
+    file("source-skill/SKILL.md", text);
+    file("source-skill/assets/icon.bin", asset);
+    file("source-skill/.gitignore", "*.bin\n");
+    await git.add({ fs, dir: source, filepath: ["SKILL.md", "assets/icon.bin", ".gitignore"], force: true });
+    const innerOid = await git.commit({ fs, dir: source, message: "Original skill history", author: { name: "Fixture", email: "fixture@example.invalid" } });
+    const sentinel = path.join(fixtureRoot, "hook-must-never-run.txt");
+    file("source-skill/.git/hooks/pre-commit", `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'executed');\n`);
+    // Deliberately include inner settings which must never affect central Git.
+    fs.appendFileSync(path.join(source, ".git", "config"), "\n[core]\n\tautocrlf = true\n\thooksPath = .git/hooks\n");
+    const target = path.join(root, destination);
+    // Model the migration's preserved ordinary-directory copy. Migration itself
+    // has independent junction tests; this verifies the resulting Git boundary.
+    fs.cpSync(source, target, { recursive: true });
+    const metadata = path.join(target, ".git"), original = metadataSnapshot(metadata);
+    const originalOpen = fs.openSync;
+    const guard = t.mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      if (typeof args[0] === "string") {
+        const relative = path.relative(metadata, path.resolve(args[0]));
+        assert.ok(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative), "central Git must not open any inner metadata file");
+      }
+      return originalOpen(...args);
+    });
+    assert.equal((await repositoryStatus(root)).dirty, 3);
+    const imported = await commitRepository(root, "Import skill work files only");
+    assert.equal(imported.changed, true);
+    assert.deepEqual(await repositoryStatus(root), { branch: "main", dirty: 0 });
+    assert.equal((await readRevision(root, imported.oid, `${destination}/SKILL.md`)).toString(), text);
+    assert.deepEqual(await readRevision(root, imported.oid, `${destination}/assets/icon.bin`), asset);
+    const tracked = await git.listFiles({ fs, dir: root, ref: imported.oid });
+    assert.ok(tracked.includes(`${destination}/SKILL.md`));
+    assert.ok(tracked.includes(`${destination}/assets/icon.bin`));
+    assert.ok(tracked.every(name => !name.split("/").some(part => part.toLowerCase() === ".git")));
+    const tree = await git.readTree({ fs, dir: root, oid: imported.oid, filepath: destination });
+    assert.ok(tree.tree.some(entry => entry.path === "SKILL.md" && entry.type === "blob"));
+    assert.ok(tree.tree.every(entry => entry.type !== "commit"), "inner repositories must not become gitlinks");
+    await assert.rejects(readRevision(root, imported.oid, `${destination}/.git/config`), /路径无效/);
+    await initRepository(root);
+    fs.writeFileSync(path.join(target, "SKILL.md"), "# Edited work file\n");
+    const edited = await commitRepository(root, "Update imported work file");
+    assert.equal((await readRevision(root, edited.oid, `${destination}/SKILL.md`)).toString(), "# Edited work file\n");
+    assert.equal((await repositoryHistory(root)).length, 3);
+    guard.mock.restore();
+    assert.deepEqual(metadataSnapshot(metadata), original, "HEAD, config, refs, index, objects, hooks all remain byte-for-byte unchanged");
+    assert.equal(fs.existsSync(sentinel), false);
+
+    fs.appendFileSync(path.join(metadata, "config"), "\n# Inner-only metadata change\n");
+    fs.writeFileSync(path.join(metadata, "refs", "heads", "inner-only"), `${innerOid}\n`);
+    const modifiedMetadata = metadataSnapshot(metadata);
+    assert.deepEqual(await repositoryStatus(root), { branch: "main", dirty: 0 });
+    assert.deepEqual(await commitRepository(root, "Metadata should not be committed"), { oid: edited.oid, changed: false });
+    assert.deepEqual(metadataSnapshot(metadata), modifiedMetadata);
+    assert.equal(fs.existsSync(sentinel), false);
+  });
+}
+
+test("inner Git pointer files, junctions and metadata aliases are not hidden as ordinary skill repositories", async t => {
+  const { dir, file } = fixture(t), root = dir("repository"), outside = dir("outside-metadata");
+  await initRepository(root);
+  const pointer = file("repository/skills/linked-worktree/.git", "gitdir: ../../outside-metadata\n");
+  await assert.rejects(repositoryStatus(root), /完整普通目录|worktree/);
+  fs.unlinkSync(pointer);
+  fs.symlinkSync(outside, pointer, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(commitRepository(root, "reject inner metadata junction"), /链接|junction/);
+  fs.unlinkSync(pointer);
+  fs.mkdirSync(pointer);
+  const nestedLink = path.join(pointer, "objects");
+  fs.symlinkSync(outside, nestedLink, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(repositoryStatus(root), /链接|junction/);
+  fs.unlinkSync(nestedLink);
+  const alias = file("repository/skills/git~1/config", "not a valid import");
+  await assert.rejects(repositoryStatus(root), /别名/);
+  fs.unlinkSync(alias);
+  fs.rmdirSync(path.dirname(alias));
+  assert.deepEqual(await repositoryStatus(root), { branch: "main", dirty: 0 });
 });

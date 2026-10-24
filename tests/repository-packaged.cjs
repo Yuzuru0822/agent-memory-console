@@ -3,6 +3,7 @@ const { _electron: electron } = require("playwright");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const git = require("isomorphic-git");
 
 (async () => {
   if (!process.argv[2]) throw new Error('Usage: node tests/repository-packaged.cjs "<packaged Agent Memory Console.exe>"');
@@ -91,6 +92,12 @@ const path = require("node:path");
     write(asset, binary);
     write(path.join(repository, "skills", "fixture", "SKILL.md"), "# Fixture skill\nDo not execute any test assets.\n");
     write(path.join(repository, "skills", "fixture", "scripts", "never-run.js"), "throw new Error('This fixture must never execute');\n");
+    const innerRoot = path.join(repository, "skills", "fixture");
+    await git.init({ fs, dir: innerRoot, defaultBranch: "skill-main" });
+    await git.add({ fs, dir: innerRoot, filepath: "SKILL.md" });
+    const innerOid = await git.commit({ fs, dir: innerRoot, message: "Original skill Git history", author: { name: "Fixture", email: "fixture@example.invalid" } });
+    await git.setConfig({ fs, dir: innerRoot, path: "remote.origin.url", value: "https://example.invalid/fixture.git" });
+    const innerConfig = fs.readFileSync(path.join(innerRoot, ".git", "config"));
     const dirty = await first.page.evaluate(() => window.consoleApi.repositorySnapshot());
     assert.equal(dirty.git.dirty, 4);
     await first.page.evaluate(() => window.consoleApi.repositoryCommit());
@@ -117,6 +124,9 @@ const path = require("node:path");
     assert.deepEqual(persisted.history.map(entry => entry.oid), committed.history.map(entry => entry.oid));
     assert.equal(fs.readFileSync(memory, "utf8"), memoryText);
     assert.deepEqual(fs.readFileSync(asset), binary);
+    assert.equal((await git.log({ fs, dir: innerRoot }))[0].oid, innerOid);
+    assert.deepEqual(fs.readFileSync(path.join(innerRoot, ".git", "config")), innerConfig);
+    assert.equal((await git.listFiles({ fs, dir: repository })).some(file => file.split("/").includes(".git")), false);
 
     // Resolve through the packaged entry, proving both Git and its transitive
     // dependencies work from app.asar rather than this test's node_modules.
@@ -140,7 +150,7 @@ const path = require("node:path");
     await restarted.page.screenshot({ path: path.join(results, "repository-packaged.png"), fullPage: true });
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ ok: true, fixture, executablePath, version: restarted.metadata.version, oid, gitModule: embedded.gitModule,
-      scenarios: ["isolated-packaged-profile", "native-repository-authorization", "embedded-git-init", "dirty-status", "binary-and-script-commit", "restart-history", "embedded-revision-read", "no-agent-grants"] }));
+      scenarios: ["isolated-packaged-profile", "native-repository-authorization", "embedded-git-init", "dirty-status", "binary-and-script-commit", "restart-history", "embedded-revision-read", "nested-git-preserved-and-excluded", "no-agent-grants"] }));
   } finally {
     if (application) await application.close();
   }

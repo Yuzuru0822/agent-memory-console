@@ -1,6 +1,6 @@
 {
   "name": "agent-memory-console",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Local Windows agent memory and skills console",
   "author": "Agent Console",

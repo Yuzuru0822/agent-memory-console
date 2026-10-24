@@ -2,9 +2,25 @@
 
 本地服务测试、真实 Electron 窗口测试和厂商集成验证分别记录。测试中的记忆、技能、脚本和 PE 字节均为人工夹具，不来自真实 Agent，也不执行技能脚本。
 
-## v0.2.0 当前状态
+## v0.2.1 本轮验证
 
-下表记录本轮已执行结果；待验证项目不能当作通过。厂商账户验证与应用本地功能验证分开。
+本轮增加技能迁移保留普通内层 Git 仓库的能力。以下状态独立于 v0.2.0 的历史结果，使用当前源码与 0.2.1 成品验证。
+
+| 检查 | 当前状态 | 需要核验的范围 |
+| --- | --- | --- |
+| `npm test` | 173 通过、2 跳过、0 失败（共 175 项） | 全量本地后端回归；文件符号链接用例因 Windows 权限限制跳过，未计为通过 |
+| 普通技能 Git 仓库迁移 | 后端测试已通过 | 根及嵌套 `.git`、packed 历史、refs/index/hooks/忽略资产与空目录保留；同名完整元数据复用、不同元数据整仓库冲突；导入中失败回滚 |
+| 中央 Git 与独立副本同步 | 后端与解包成品均通过 | 工作文件纳入中央版本和双向同步；排除内层 `.git`，不生成 gitlink、不传播内层历史；ASAR 中提交及重启读取成功 |
+| junction 与 Git | 后端与桌面均通过 | 连接保留完整工作树与原入口；解除连接恢复原目录和原元数据，仓库内容保留 |
+| 外部依赖与执行边界 | 后端测试已通过 | 外置指针、共享工作树/对象库、路径配置、锁与元数据链接拒绝；注释/续行配置解析；目标及父目录被替换时停止连接并保留现场；普通文件 32 MiB / Git pack 128 MiB 边界 |
+| `npm run build` | 已通过 | Renderer 类型检查、Electron 主进程/preload、Vite 生产构建 |
+| 桌面 UI 回归 | 原有桌面回归及 14 个仓库场景均通过 | 新增真实 Git 技能夹具：迁移提示、配置正文不展示、提交历史和远程配置保留、中央索引排除元数据、解除连接恢复 |
+| Windows x64 解包成品 | 已通过 | 0.2.1 可见窗口、沙箱及原生接口；只读发现 npm Claude 2.1.243；19 个 ASAR 编译文件与构建结果一致 |
+| Windows x64 便携成品 | 已通过 | 自动解压、独立测试配置、可见窗口与原生接口；成品未签名 |
+
+## v0.2.0 历史验证
+
+下表记录 v0.2.0 已执行结果。厂商账户验证与应用本地功能验证分开。
 
 | 检查 | 当前状态 | 范围 |
 | --- | --- | --- |
@@ -22,7 +38,7 @@
 | 六家厂商真实账户与技能加载 | 未验证 | 没有代替用户登录、运行付费任务或证明跨厂商技能兼容 |
 | 代码签名 / 自动更新 | 未配置 | 工程不包含签名凭据或自动更新服务 |
 
-历史参考：v0.1.2 的 88 项后端测试中 86 通过、2 项文件符号链接用例因 Windows `EPERM` 跳过；目录 junction 回归实际通过。该旧版桌面、解包及便携启动曾通过，不能作为 v0.2.0 本轮结果。npm Claude 2.1.243 曾仅执行 `--version`，没有验证登录、任务权限或计费调用。
+历史参考：v0.1.2 的 88 项后端测试中 86 通过、2 项文件符号链接用例因 Windows `EPERM` 跳过；目录 junction 回归实际通过。该旧版桌面、解包及便携启动曾通过，不能代替其他版本的验证。npm Claude 2.1.243 曾仅执行 `--version`，没有验证登录、任务权限或计费调用。
 
 ## 运行命令
 
@@ -36,13 +52,13 @@ node tests/process-smoke.cjs
 node tests/npm-process-smoke.cjs
 npm run test:desktop
 node tests/repository-desktop.cjs
-npm run dist -- --config.directories.output=release-0.2.0
-node tests/packaged.cjs "release-0.2.0/win-unpacked/Agent Memory Console.exe"
-node tests/repository-packaged.cjs "release-0.2.0/win-unpacked/Agent Memory Console.exe"
-node tests/portable.cjs "release-0.2.0/Agent-Memory-Console-0.2.0-win-x64.exe"
+npm run dist -- --config.directories.output=release-0.2.1
+node tests/packaged.cjs "release-0.2.1/win-unpacked/Agent Memory Console.exe"
+node tests/repository-packaged.cjs "release-0.2.1/win-unpacked/Agent Memory Console.exe"
+node tests/portable.cjs "release-0.2.1/Agent-Memory-Console-0.2.1-win-x64.exe"
 ```
 
-需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.2.0`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。
+需要更快检查解包产物时使用 `npm run pack -- --config.directories.output=release-0.2.1`。默认打包目录仍为 `release/`，若旧版正在使用它，不要强行终止用户程序；改用版本目录。成品测试脚本首个参数接受自定义 EXE 路径。以上命令是本版验证入口，是否已执行以顶部结果表为准。
 
 桌面测试需要完整 Electron 运行时和可用图形桌面，不能用单纯浏览器预览替代。electron-builder 使用已安装的 `node_modules/electron/dist`。
 
@@ -58,7 +74,7 @@ node tests/portable.cjs "release-0.2.0/Agent-Memory-Console-0.2.0-win-x64.exe"
 | `skill-paths.test.ts` / `linked-service.test.ts` | 根/父级/内部 junction、实际路径去重、断链和循环、旧授权不扩大、目标改指拒绝、链接保留与恢复 |
 | `merge.test.ts` | 单端变化、双方独立变化、真实冲突、无共同版本、换行保留及容量限制 |
 | `repository-git.test.ts` | 独立空目录初始化、标识校验、状态/提交/历史、仓库链接拒绝、路径与对象范围约束 |
-| `junction-migration.test.ts` | 完整技能字节、脚本仅存储、同名冲突、断链/循环保留、入口身份变化、迁移失败回滚、解除连接保留仓库 |
+| `junction-migration.test.ts` | 完整技能字节、脚本仅存储、同名冲突、断链/循环保留、入口身份变化、迁移失败回滚、解除连接保留仓库；普通内层 Git 保留、整仓库冲突与复用、外部依赖/锁拒绝、pack 容量 |
 | `repository-service.test.ts` | 多文件记忆分区、共同版本、双向预览/选择、无删除传播、自动化授权范围、备份与清理策略；具体断言和计数以测试输出为准 |
 | `repository-shared.test.ts` | 多 Agent 共享技能的单端文字/二进制更新、独立修改汇总、真实冲突、统一版本选择、人工预览期间暂停自动任务 |
 
@@ -79,7 +95,7 @@ node tests/portable.cjs "release-0.2.0/Agent-Memory-Console-0.2.0-win-x64.exe"
 - 自动化启用及关闭、保留策略和手动清理；原生确认显示实际路径并默认取消。
 - 1000 × 800 窗口无横向溢出，捕获到的 Renderer 脚本异常为零。
 
-自动化运行与保留期限逻辑另由服务测试覆盖。桌面脚本替换系统文件选择器返回值和原生确认响应，不证明真实人工点击 Windows 文件对话框已完成验证。最终构建后执行全部 14 项场景通过，包含关闭预览使计划失效、多 Agent 二进制统一选择、缺失版本按钮禁用及刷新状态保留，Renderer 异常为零。截图在 `test-results/repository-conflict.png` 与 `repository-compact.png`，已逐张查看，深色布局与冲突编辑区正常，1000 像素窗口没有横向溢出。截图只包含人工夹具。
+自动化运行与保留期限逻辑另由服务测试覆盖。桌面脚本替换系统文件选择器返回值和原生确认响应，不证明真实人工点击 Windows 文件对话框已完成验证。v0.2.0 最终构建后执行全部 14 项场景通过，包含关闭预览使计划失效、多 Agent 二进制统一选择、缺失版本按钮禁用及刷新状态保留，Renderer 异常为零。该轮截图在 `test-results/repository-conflict.png` 与 `repository-compact.png`，已逐张查看，深色布局与冲突编辑区正常，1000 像素窗口没有横向溢出。截图只包含人工夹具；不替代 v0.2.1 的测试结果。
 
 ## 成品与进程检查
 
