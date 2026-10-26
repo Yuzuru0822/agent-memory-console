@@ -4,7 +4,7 @@
 
 这是可运行的本地文件与进程管理工程。Claude Code CLI 按官方文档适配用户级记忆、技能路径及单次任务；v0.2.2 新增 Qoder 的用户技能、CLI 静态指令候选和 IDE EXE 启动，未接入 Qoder CLI 任务或 IDE 自动记忆。WorkBuddy、TRAE、DeepSeek Harness、智谱 Zcode、千问 Work 使用候选路径或手动绑定，尚未验证厂商协议兼容性。界面不会把文件发现结果显示成登录、额度或会话状态。完整范围见 [集成说明](docs/INTEGRATIONS.md)。
 
-私有源码仓库：[Yuzuru0822/agent-memory-console](https://github.com/Yuzuru0822/agent-memory-console)，需使用有访问权限的 GitHub 账户。
+公开源码仓库：[Yuzuru0822/agent-memory-console](https://github.com/Yuzuru0822/agent-memory-console)，可直接浏览和克隆。许可证见 [MIT License](LICENSE)。
 
 v0.7.0 将统一仓库的预览、同步、Git 保存和总览文件检查放到独立后台线程执行，增加全局阶段进度与每页 100 项的预览。大量技能不再需要一次渲染全部列表；重复文件读取和 Git 索引写入也已减少。实际耗时仍取决于文件数量、内容大小和磁盘速度。
 
