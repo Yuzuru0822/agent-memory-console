@@ -227,6 +227,7 @@ test("unsupported remote responses close their socket immediately even if the bo
   }
 });
 test("remote URL policy blocks credentials, private networks, metadata, implicit loopback and self loops", async t => {
+  // Synthetic private/metadata addresses exercise SSRF rejection, not deployment configuration.
   for (const url of ["http://example.com/rpc", "https://user:pass@example.com/rpc", "https://example.com/rpc?token=x", "https://10.0.0.1/rpc", "https://169.254.169.254/rpc", "https://[::1]/rpc", "http://127.0.0.1:9999/rpc"]) assert.throws(() => remoteUrl(url, false));
   for (const address of ["127.0.0.1", "10.0.0.2", "100.64.0.1", "192.168.1.1", "169.254.169.254", "::1", "::ffff:127.0.0.1", "fc00::1", "fe80::1", "2001:db8::1"]) assert.equal(publicAddress(address), false, address);
   assert.equal(publicAddress("8.8.8.8"), true); assert.equal(publicAddress("2606:4700:4700::1111"), true);
