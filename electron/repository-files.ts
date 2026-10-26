@@ -8,7 +8,8 @@ export const TOTAL_LIMIT = 256 * 1024 * 1024;
 export const COUNT_LIMIT = 5000;
 export const pathKey = (p: string) => process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p);
 export const samePath = (a: string, b: string) => pathKey(a) === pathKey(b);
-export function bytes(file: string): Buffer | undefined {
+/** Capture file contents and their comparison timestamp from the same open handle. */
+export function fileSnapshot(file: string): { data: Buffer; modifiedMs: number } | undefined {
   noLinks(file);
   try {
     const fd = fs.openSync(file, "r");
@@ -17,13 +18,16 @@ export function bytes(file: string): Buffer | undefined {
       if (!stat.isFile() || stat.size > FILE_LIMIT) throw new Error(`文件不是普通文件或超过 32 MiB：${file}`);
       const data = fs.readFileSync(fd);
       if (data.length > FILE_LIMIT) throw new Error("文件在读取期间超出限制");
-      return data;
+      const after = fs.fstatSync(fd);
+      if (stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs) throw new Error(`文件在读取期间发生变化，请重新预览：${file}`);
+      return { data, modifiedMs: after.mtimeMs };
     } finally { fs.closeSync(fd); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
 }
+export const bytes = (file: string): Buffer | undefined => fileSnapshot(file)?.data;
 export const hash = (data?: Buffer) => data === undefined ? null : digest(data);
 export function plainText(data?: Buffer): string | undefined {
   if (data === undefined || data.length > 1024 * 1024 || data.includes(0)) return undefined;

@@ -35,6 +35,9 @@ export interface RepositoryFile {
   repositoryPath: string;
   localExists?: boolean;
   repositoryExists?: boolean;
+  localModifiedMs?: number;
+  repositoryModifiedMs?: number;
+  recommendation?: { sourceKey: string; reason: "repository-missing" | "agent-newer"; tied: boolean };
   localText?: string;
   repositoryText?: string;
   baseText?: string;
@@ -69,6 +72,7 @@ export interface RepositoryApi {
   repositoryMemoryFolder(id: AgentId): Promise<Result>;
   repositoryPreview(): Promise<RepositoryPlan>;
   repositoryCancelPreview(): Promise<Result>;
+  repositoryExportPreview(id: string, choices: Record<string, RepositoryResolution>): Promise<Result>;
   repositoryApply(id: string, choices: Record<string, RepositoryResolution>): Promise<Result>;
   repositoryCommit(): Promise<Result>;
   repositoryAutomation(options: RepositoryAutomation): Promise<Result>;

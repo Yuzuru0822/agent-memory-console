@@ -10,7 +10,7 @@ import { resolveSkillPath } from "./skill-paths";
 import { initRepository, commitRepository, repositoryHistory, repositoryStatus } from "./repository-git";
 import { mergeText } from "./merge";
 import { previewJunction, applyJunction, undoJunction, type JunctionPreview } from "./junction-migration";
-import { bytes, hash, plainText, inventory, relativePath, samePath, pathKey, TOTAL_LIMIT, COUNT_LIMIT } from "./repository-files";
+import { bytes, fileSnapshot, hash, plainText, inventory, relativePath, samePath, pathKey, TOTAL_LIMIT, COUNT_LIMIT } from "./repository-files";
 
 const defaults: RepositoryAutomation = { enabled: false, intervalSeconds: 60, cleanupEnabled: false, retentionDays: 30, minBackups: 20 };
 interface Base { hash: string; blob?: string; agent: AgentId; kind: "memory" | "skills"; relative: string }
@@ -198,8 +198,10 @@ export class RepositoryService {
           const view: RepositoryFile = { key, agent: id, kind, relative, agentPath: local.get(relative) || (single || relativePath(localRoot, relative)), repositoryPath: repository.get(relative) || relativePath(repoRoot, relative), binary: false, conflict: false, description: "内容一致" };
           this.validateLocal(view);
           const realLocal = this.localReal(view);
-          const localData = bytes(realLocal), repoData = bytes(view.repositoryPath);
+          const localSnapshot = fileSnapshot(realLocal), repositorySnapshot = fileSnapshot(view.repositoryPath);
+          const localData = localSnapshot?.data, repoData = repositorySnapshot?.data;
           view.localExists = localData !== undefined; view.repositoryExists = repoData !== undefined;
+          view.localModifiedMs = localSnapshot?.modifiedMs; view.repositoryModifiedMs = repositorySnapshot?.modifiedMs;
           if (!localData && !repoData) continue;
           total += (localData?.length || 0) + (repoData?.length || 0);
           if (pairs.length >= COUNT_LIMIT || total > TOTAL_LIMIT * 2) throw new Error("同步批次超过 5000 文件或 256 MiB，请减少纳管目录");
@@ -245,6 +247,25 @@ export class RepositoryService {
       if (conflict) group.forEach(p=>{ p.view.conflict=true; p.view.description="多个 Agent 对同一技能给出不同版本，请统一选择结果"; p.output=undefined; });
       else if (merged!==undefined) group.forEach(p=>{ p.output=merged; p.view.mergedText=plainText(merged); if(hash(merged)!==p.localHash||hash(merged)!==p.repositoryHash) p.view.description="汇总共享技能修改，同步到所有选定 Agent"; });
     }
+    // These suggestions only initialize the manual preview. They never resolve a
+    // conflict in the service or allow a scheduled run to overwrite a version.
+    const recommendationGroups = [...groups.values(), ...pairs.filter(p=>p.view.kind === "memory").map(p=>[p])];
+    for (const group of recommendationGroups) {
+      if (!group.some(p=>p.view.conflict)) continue;
+      const candidates = group.filter(p=>p.local !== undefined && Number.isFinite(p.view.localModifiedMs));
+      candidates.sort((a,b)=>(b.view.localModifiedMs! - a.view.localModifiedMs!) || (a.view.agent < b.view.agent ? -1 : a.view.agent > b.view.agent ? 1 : a.view.key < b.view.key ? -1 : a.view.key > b.view.key ? 1 : 0));
+      const source = candidates[0];
+      if (!source) continue;
+      const repositoryPresent = group.some(p=>p.repository !== undefined);
+      const repositoryModifiedMs = Math.max(...group.map(p=>p.view.repositoryModifiedMs ?? -Infinity));
+      if (repositoryPresent && source.view.localModifiedMs! <= repositoryModifiedMs) continue;
+      const recommendation: NonNullable<RepositoryFile["recommendation"]> = {
+        sourceKey: source.view.key,
+        reason: repositoryPresent ? "agent-newer" : "repository-missing",
+        tied: candidates.some(p=>p !== source && p.view.localModifiedMs === source.view.localModifiedMs && p.localHash !== source.localHash),
+      };
+      group.filter(p=>p.view.conflict).forEach(p=>{ p.view.recommendation = { ...recommendation }; });
+    }
     let previewBudget = 512 * 1024;
     for (const p of pairs) {
       for (const field of ["localText","repositoryText","baseText","mergedText"] as const) {
@@ -265,7 +286,9 @@ export class RepositoryService {
   private preflight(pair: Pair): void {
     this.validateLocal(pair.view);
     if (!samePath(this.localReal(pair.view),pair.realLocal)) throw new Error(`预览后实际路径或链接发生变化：${pair.view.relative}`);
-    if (hash(bytes(this.localReal(pair.view))) !== pair.localHash || hash(bytes(pair.view.repositoryPath)) !== pair.repositoryHash) throw new Error(`预览后文件或链接发生变化：${pair.view.relative}`);
+    const local = fileSnapshot(this.localReal(pair.view)), repository = fileSnapshot(pair.view.repositoryPath);
+    if (hash(local?.data) !== pair.localHash || hash(repository?.data) !== pair.repositoryHash) throw new Error(`预览后文件或链接发生变化：${pair.view.relative}`);
+    if (pair.view.recommendation && (local?.modifiedMs !== pair.view.localModifiedMs || repository?.modifiedMs !== pair.view.repositoryModifiedMs)) throw new Error(`预览后文件修改时间发生变化，请重新预览：${pair.view.relative}`);
   }
   private createBackup(writes: { target: string; before?: Buffer }[]): { folder: string; manifest: BackupManifest } {
     const id = crypto.randomUUID(), folder = path.join(this.area(), "backups", id);
@@ -293,7 +316,7 @@ export class RepositoryService {
           pair.output = Buffer.from(choice.text);
         } else if (choice.choice === "agent" && choice.sourceKey) {
           const source=plan.pairs.find(p=>p.view.key===choice.sourceKey);
-          if (!source || source.view.kind!=="skills" || pair.view.kind!=="skills" || !samePath(source.view.repositoryPath,pair.view.repositoryPath)) throw new Error("共享技能版本来源无效");
+          if (!source || source !== pair && (source.view.kind!=="skills" || pair.view.kind!=="skills" || !samePath(source.view.repositoryPath,pair.view.repositoryPath))) throw new Error("共享技能版本来源无效");
           pair.output=source.local;
         } else pair.output = choice.choice === "agent" ? pair.local : pair.repository;
       }

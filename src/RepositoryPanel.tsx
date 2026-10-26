@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -29,6 +29,7 @@ import type {
   RepositorySnapshot,
 } from "./repository-types";
 import "./repository.css";
+import { bulkReviewResolution, indexRepositoryReview, recommendedReviewResolutions, reviewGroup, setReviewResolution, type ReviewBulkAction } from "./repository-review";
 
 const api = window.consoleApi;
 const stamp = (value?: string | number) =>
@@ -91,6 +92,10 @@ export default function RepositoryPanel({
   const [resolutions, setResolutions] = useState<
     Record<string, RepositoryResolution>
   >({});
+  const [reviewSearch, setReviewSearch] = useState("");
+  const [reviewFilter, setReviewFilter] = useState("all");
+  const [checkedFiles, setCheckedFiles] = useState<Set<string>>(new Set());
+  const [batchNotice, setBatchNotice] = useState("");
   const [junction, setJunction] = useState<JunctionView>();
   const [junctionChoices, setJunctionChoices] = useState<
     Record<string, "agent" | "repository">
@@ -186,11 +191,27 @@ export default function RepositoryPanel({
     !!snapshot &&
     JSON.stringify(automation) !== JSON.stringify(snapshot.automation);
   const working = busy || !!snapshot?.running;
+  const reviewIndex = useMemo(() => indexRepositoryReview(plan?.files || []), [plan]);
+  const memberNames = useMemo(() => new Map(snapshot?.members.map(member => [member.id, member.name]) || []), [snapshot?.members]);
+  const visibleFiles = useMemo(() => {
+    const query = reviewSearch.trim().toLowerCase();
+    return (plan?.files || []).filter(file =>
+      (!query || `${file.relative} ${memberNames.get(file.agent) || file.agent}`.toLowerCase().includes(query)) &&
+      (reviewFilter === "all" ||
+       reviewFilter === "conflicts" && file.conflict ||
+       reviewFilter === "unresolved" && file.conflict && !resolutions[file.key] ||
+       reviewFilter === "recommended" && !!file.recommendation));
+  }, [plan, reviewSearch, reviewFilter, resolutions, memberNames]);
+  const recommendations = useMemo(() => [...reviewIndex.groups.values()].flatMap(group => {
+    const file = group.find(item => item.recommendation);
+    const source = file?.recommendation && reviewIndex.files.get(file.recommendation.sourceKey);
+    return file && source ? [{ file, source, group }] : [];
+  }), [reviewIndex]);
   const unresolved =
     plan?.files.filter((file) => file.conflict && !resolutions[file.key])
       .length || 0;
   const currentFile =
-    plan?.files.find((file) => file.key === fileKey) || plan?.files[0];
+    visibleFiles.find((file) => file.key === fileKey) || visibleFiles[0];
   const junctionUnresolved =
     junction?.files.filter(
       (file) => file.conflict && !junctionChoices[file.relative],
@@ -202,18 +223,11 @@ export default function RepositoryPanel({
     snapshot?.members.filter((member) => ids.includes(member.id)) || [];
   const sharedFiles =
     currentFile?.kind === "skills"
-      ? plan?.files.filter(
-          (file) =>
-            file.kind === "skills" &&
-            file.repositoryPath.replace(/\\/g, "/").toLowerCase() ===
-              currentFile.repositoryPath.replace(/\\/g, "/").toLowerCase(),
-        ) || []
+      ? reviewGroup(reviewIndex, currentFile.key)
       : [];
   const selectedSource =
     currentFile && resolutions[currentFile.key]?.sourceKey
-      ? plan?.files.find(
-          (file) => file.key === resolutions[currentFile.key].sourceKey,
-        )
+      ? reviewIndex.files.get(resolutions[currentFile.key].sourceKey!)
       : undefined;
   async function cancelPreview() {
     await run(async () => {
@@ -221,6 +235,8 @@ export default function RepositoryPanel({
       setPlan(undefined);
       setJunction(undefined);
       setResolutions({});
+      setCheckedFiles(new Set());
+      setBatchNotice("");
       setJunctionChoices({});
       return result;
     });
@@ -238,26 +254,13 @@ export default function RepositoryPanel({
 
   function chooseSharedResolution(choice: RepositoryResolution["choice"]) {
     if (!currentFile) return;
-    const resolution: RepositoryResolution =
-      choice === "agent"
-        ? { choice, sourceKey: currentFile.key }
-        : choice === "manual"
-          ? { choice, text: resolutions[currentFile.key]?.text || "" }
-          : { choice };
-    setResolutions((current) => {
-      const next = { ...current };
-      for (const file of sharedFiles)
-        if (file.conflict) next[file.key] = resolution;
-      return next;
-    });
+    chooseResolution(currentFile, choice);
   }
   function chooseResolution(
     file: RepositoryFile,
     choice: RepositoryResolution["choice"],
   ) {
-    setResolutions((current) => ({
-      ...current,
-      [file.key]: {
+    setResolutions((current) => setReviewResolution(reviewIndex, current, file.key, {
         choice,
         ...(choice === "manual"
           ? {
@@ -269,8 +272,29 @@ export default function RepositoryPanel({
                 "",
             }
           : {}),
-      },
-    }));
+      }));
+  }
+  function toggleChecked(key: string, checked: boolean) {
+    setCheckedFiles(current => {
+      const next = new Set(current);
+      for (const file of reviewGroup(reviewIndex, key)) if (file.conflict) {
+        if (checked) next.add(file.key); else next.delete(file.key);
+      }
+      return next;
+    });
+  }
+  function selectVisible() {
+    setCheckedFiles(current => {
+      const next = new Set(current);
+      for (const file of visibleFiles) if (file.conflict)
+        for (const related of reviewGroup(reviewIndex, file.key)) if (related.conflict) next.add(related.key);
+      return next;
+    });
+  }
+  function applyBulk(action: ReviewBulkAction) {
+    const result = bulkReviewResolution(reviewIndex, resolutions, checkedFiles, action);
+    setResolutions(result.resolutions);
+    setBatchNotice(`已处理 ${result.changedGroups} 个文件（共享引用同步更新）${result.skippedGroups ? `；跳过 ${result.skippedGroups} 个没有可用版本或推荐的文件，保留原选择` : ""}。`);
   }
   async function preview() {
     await run(async () => {
@@ -279,7 +303,11 @@ export default function RepositoryPanel({
       setFileKey(
         next.files.find((file) => file.conflict)?.key || next.files[0]?.key,
       );
-      setResolutions({});
+      setResolutions(recommendedReviewResolutions(indexRepositoryReview(next.files)));
+      setReviewSearch("");
+      setReviewFilter("all");
+      setCheckedFiles(new Set());
+      setBatchNotice("");
       setJunction(undefined);
     });
   }
@@ -579,24 +607,72 @@ export default function RepositoryPanel({
             。应用前再次核对文件；文件已改变时，请重新预览。
           </p>
           <Warnings values={plan.warnings} />
+          {recommendations.length > 0 && (
+            <details className="repo-recommendations" open>
+              <summary>默认采用 Agent 清单（{recommendations.length} 个文件）</summary>
+              <p className="footnote">
+                仓库缺失或 Agent 更新时已预选 Agent 内容，仍需点击应用后才写入。多个 Agent 提供不同版本时采用修改时间最新的一份；时间相同则按 Agent 标识和文件键的固定顺序选择。可以在下方更改选择。
+              </p>
+              <div className="repo-recommendation-table">
+                <table>
+                  <thead><tr><th>文件 / 引用方</th><th>推荐来源</th><th>原因</th><th>Agent 修改时间</th><th>仓库修改时间</th><th>当前选择</th></tr></thead>
+                  <tbody>{recommendations.map(({ file, source, group }) => {
+                    const selected = resolutions[file.key];
+                    const selectedAgent = selected?.choice === "agent" ? reviewIndex.files.get(selected.sourceKey || file.key) : undefined;
+                    return <tr key={file.key}>
+                      <td><button className="repo-manifest-file" onClick={() => { setReviewSearch(""); setReviewFilter("all"); setFileKey(file.key); }}>{file.relative}</button><small>{group.map(item => memberNames.get(item.agent) || item.agent).join("、")}</small></td>
+                      <td>{memberNames.get(source.agent) || source.agent}</td>
+                      <td>{file.recommendation?.reason === "repository-missing" ? "仓库没有该文件" : "Agent 比仓库更新"}{file.recommendation?.tied && <small className="repo-time-tie">多个 Agent 时间相同，已按固定顺序选择</small>}</td>
+                      <td>{source.localModifiedMs === undefined ? "未知" : stamp(source.localModifiedMs)}</td>
+                      <td>{file.repositoryExists === false ? "没有该文件" : file.repositoryModifiedMs === undefined ? "未知" : stamp(file.repositoryModifiedMs)}</td>
+                      <td>{selectedAgent ? `${memberNames.get(selectedAgent.agent) || selectedAgent.agent} 内容` : selected?.choice === "repository" ? "仓库内容" : selected?.choice === "manual" ? "手动合并" : "待选择"}</td>
+                    </tr>;
+                  })}</tbody>
+                </table>
+              </div>
+            </details>
+          )}
+          {plan.files.length > 0 && (
+            <div className="repo-review-tools">
+              <div className="repo-review-filters">
+                <input aria-label="搜索同步文件" placeholder="搜索文件或 Agent…" value={reviewSearch} onChange={event => setReviewSearch(event.target.value)} />
+                <select aria-label="筛选同步文件" value={reviewFilter} onChange={event => setReviewFilter(event.target.value)}>
+                  <option value="all">全部项目</option>
+                  <option value="conflicts">全部冲突</option>
+                  <option value="unresolved">待处理冲突</option>
+                  <option value="recommended">有推荐的冲突</option>
+                </select>
+                <span className="footnote">显示 {visibleFiles.length} / {plan.files.length} 项 · 已勾选 {checkedFiles.size} 项</span>
+                <button disabled={working} onClick={() => void run(() => api!.repositoryExportPreview(plan.id, resolutions))}>导出处理清单</button>
+              </div>
+              <div className="repo-review-bulk" role="group" aria-label="批量处理同步冲突">
+                <button className="small" disabled={working || !visibleFiles.some(file => file.conflict)} onClick={selectVisible}>勾选当前筛选冲突</button>
+                <button className="small" disabled={working || !checkedFiles.size} onClick={() => setCheckedFiles(new Set())}>取消全部勾选</button>
+                <span className="repo-bulk-divider" />
+                <button className="small" disabled={working || !checkedFiles.size} onClick={() => applyBulk("agent")}>采用最新 Agent</button>
+                <button className="small" disabled={working || !checkedFiles.size} onClick={() => applyBulk("repository")}>采用仓库</button>
+                <button className="small" disabled={working || !checkedFiles.size} onClick={() => applyBulk("recommended")}>恢复推荐</button>
+                <button className="small" disabled={working || !checkedFiles.size} onClick={() => applyBulk("clear")}>清除处理选择</button>
+              </div>
+              <p className="footnote">批量操作用于已勾选的冲突；同一技能的所有引用方一起更新。仓库版本不存在时跳过，普通合并结果保持不变。</p>
+              {batchNotice && <p className="repo-batch-notice" role="status">{batchNotice}</p>}
+            </div>
+          )}
           {plan.files.length ? (
             <div className="repo-review-grid">
               <div className="repo-file-list">
-                {plan.files.map((file) => (
+                {visibleFiles.map((file) => (
+                  <div className="repo-review-file-row" key={file.key}>
+                  {file.conflict && <input type="checkbox" aria-label={`勾选 ${file.agent} ${file.relative}`} checked={checkedFiles.has(file.key)} disabled={working} onChange={event => toggleChecked(file.key, event.target.checked)} />}
                   <button
                     className={currentFile?.key === file.key ? "active" : ""}
-                    key={file.key}
                     onClick={() => setFileKey(file.key)}
                   >
                     <FileText size={14} />
                     <span>
                       <strong>{file.relative}</strong>
                       <small>
-                        {
-                          snapshot.members.find(
-                            (member) => member.id === file.agent,
-                          )?.name
-                        }{" "}
+                        {memberNames.get(file.agent)}{" "}
                         · {file.kind === "memory" ? "记忆" : "技能"}
                       </small>
                     </span>
@@ -614,7 +690,9 @@ export default function RepositoryPanel({
                         : "合并"}
                     </i>
                   </button>
+                  </div>
                 ))}
+                {!visibleFiles.length && <p className="repo-placeholder">当前筛选没有匹配项。</p>}
               </div>
               {currentFile && (
                 <div className="repo-file-review">
@@ -703,16 +781,15 @@ export default function RepositoryPanel({
                                 resolutions[currentFile.key]?.choice ===
                                   option.choice &&
                                 (option.choice !== "agent" ||
-                                  !resolutions[currentFile.key]?.sourceKey ||
-                                  resolutions[currentFile.key].sourceKey ===
-                                    currentFile.key)
+                                  (resolutions[currentFile.key]?.sourceKey || currentFile.key) === currentFile.key)
                               }
                               disabled={
                                 working ||
                                 (option.choice === "agent" &&
                                   currentFile.localExists === false) ||
                                 (option.choice === "repository" &&
-                                  currentFile.repositoryExists === false)
+                                  currentFile.repositoryExists === false) ||
+                                (option.choice === "manual" && reviewGroup(reviewIndex, currentFile.key).some(file => file.binary || file.previewTruncated))
                               }
                               onChange={() =>
                                 chooseResolution(currentFile, option.choice)
@@ -741,13 +818,10 @@ export default function RepositoryPanel({
                           value={resolutions[currentFile.key].text || ""}
                           disabled={working}
                           onChange={(event) =>
-                            setResolutions((current) => ({
-                              ...current,
-                              [currentFile.key]: {
+                            setResolutions((current) => setReviewResolution(reviewIndex, current, currentFile.key, {
                                 choice: "manual",
                                 text: event.target.value,
-                              },
-                            }))
+                              }))
                           }
                         />
                       )}

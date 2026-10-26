@@ -50,6 +50,7 @@ const api: ConsoleApi = {
   repositoryMembers: ids => ipcRenderer.invoke("console:repositoryMembers", ids),
   repositoryMemoryFolder: id => ipcRenderer.invoke("console:repositoryMemoryFolder", id),
   repositoryPreview: () => ipcRenderer.invoke("console:repositoryPreview"),
+  repositoryExportPreview: (id, choices) => ipcRenderer.invoke("console:repositoryExportPreview", id, choices),
   repositoryCancelPreview: () => ipcRenderer.invoke("console:repositoryCancelPreview"),
   repositoryApply: (id, choices) => ipcRenderer.invoke("console:repositoryApply", id, choices),
   repositoryCommit: () => ipcRenderer.invoke("console:repositoryCommit"),

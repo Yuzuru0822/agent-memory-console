@@ -8,11 +8,11 @@
 
 ## 运行
 
-便携单文件版可直接双击 `Agent-Memory-Console-0.6.0-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.6.0-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
+便携单文件版可直接双击 `Agent-Memory-Console-0.6.1-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.6.1-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
 
 已取得解包版时，无需安装 Node.js：保留 `win-unpacked` 整个目录及其中所有资源，双击目录内的 `Agent Memory Console.exe`。不能只复制这一个 EXE，或直接在压缩包预览窗口内运行它。积分福利还依赖随包的 `resources/rewards/RewardBridge.exe` 与 Windows .NET Framework 组件，不能删除这个资源目录。工程中的对应位置为 `release/win-unpacked/`。
 
-本版建议将成品输出到 `release-0.6.0/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.6.0/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
+本版建议将成品输出到 `release-0.6.1/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.6.1/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
 
 从源码运行或重新打包时，按以下步骤操作。
 
@@ -72,6 +72,16 @@ npm start
 记忆分区避免把不同 Agent 的同名文件互相覆盖，内容不会被强行合成一份 Markdown。Git 保存版本；双向同步的共同版本另保存在控制台数据目录，用于识别两端独立修改。
 
 多个 Agent 对同一技能给出不同版本时，可点击“此 Agent 版本用于所有引用方”统一选择，包括二进制资产；也可统一采用仓库或手动合并的文本。人工预览打开期间自动同步暂缓，关闭预览、按 Escape 或离开仓库页会取消计划；过期计划需要重新预览。
+
+### v0.6.1：默认预选与批量处理
+
+仓库没有文件时，单一 Agent 的文件会自动导入；多个 Agent 提供同名但不同内容的技能，仍需要选定一份共享结果。预览现在会默认采用修改时间最新的 Agent 文件。仓库已有文件且产生冲突时，如果 Agent 文件更新，也会默认采用 Agent；仓库时间较新或相同时仍留待选择。这里比较的是文件系统的修改时间，普通三方合并和单端更新仍按已有共同版本处理。
+
+“默认采用 Agent 清单”列出相对路径、推荐来源、选择原因、两端时间和当前处理。多个 Agent 最新时间相同但内容不同时，按 Agent ID 和文件键的固定顺序预选，并显示时间相同提示。所有共享引用使用同一来源，可在详情中改选其他 Agent、仓库或手动合并。
+
+可搜索文件/Agent、筛选全部冲突或待处理项，点击“勾选当前筛选冲突”，再批量“采用最新 Agent”“采用仓库”“恢复推荐”或“清除处理选择”。勾选一个共享文件会联动所有引用方；批量操作应用于全部已勾选项，包含切换筛选后隐藏的勾选项。仓库文件不存在时，批量采用仓库会跳过并提示。
+
+“导出处理清单”将本次预览的全部项目和当前选择保存为 UTF-8 CSV，包含来源路径和修改时间，不包含技能、记忆或手动合并正文。请保存到纳管目录以外。预选只减少人工点击，仍需核对清单后点击“确认应用双向同步”；后台自动同步遇到冲突继续暂停。预览后内容、链接或推荐依据的修改时间改变时，需要重新预览。
 
 ### 兼容模式：原有共享源
 
@@ -200,7 +210,7 @@ node tests/portable.cjs
 | `npm run pack` | 构建 Windows x64 解包版，输出至 `release/win-unpacked/` |
 | `node tests/packaged.cjs` | 启动上述解包成品并检查打包状态、沙箱、原生接口和页面切换；使用独立测试配置目录 |
 | `node tests/repository-packaged.cjs "成品 EXE 路径"` | 检查 ASAR 内嵌 Git 初始化、文本和二进制提交、重启后的历史及版本读取；使用独立仓库，不授权 Agent |
-| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.6.0-win-x64.exe` |
+| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.6.1-win-x64.exe` |
 | `node tests/portable.cjs` | 启动便携单文件成品并检查自动解压、隔离配置、原生接口和页面切换 |
 
 打包后的应用携带 Electron 和 `resources/rewards/RewardBridge.exe`，用户运行时不需要 Node.js；积分桥接使用 Windows 的 .NET Framework 运行环境。源码直接运行时则需要完整的 `native/bin/RewardBridge.exe` 构建产物。便携版不等于数据随 EXE 存放：数据仍写入 Windows 用户数据目录。此工程没有配置代码签名、自动更新或安装器；Windows 可能对未签名程序显示提示。项目测试不代表已完成七家厂商客户端的真实账户端到端测试。

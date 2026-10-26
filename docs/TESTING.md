@@ -2,7 +2,37 @@
 
 本地服务测试、真实 Electron 窗口测试和厂商集成验证分别记录。测试中的记忆、技能、脚本和 PE 字节均为人工夹具，不来自真实 Agent，也不执行技能脚本。
 
-## v0.6.0 本轮验证（2026-10-26）
+## v0.6.1 本轮验证（2026-10-26）
+
+本轮增加双向同步冲突的时间推荐、共享来源统一选择、批量处理及 CSV 清单。所有写入与内容断言使用隔离人工夹具，不读取用户截图中的文件正文。
+
+| 检查 | 结果 | 范围 |
+| --- | --- | --- |
+| `npm run build` | 通过 | Renderer/Main TypeScript、原生桥构建与 Vite 构建 |
+| `npm test` | 378 通过、2 跳过、0 失败（共 380 项） | 符号链接权限导致的两项跳过保留；目录 junction 测试通过 |
+| `repository-recommendations.test.ts` | 11 项通过 | 空仓库、多 Agent、时间新旧/相同、稳定平局、单 Agent 导入、修改时间失效、自身记忆 sourceKey、自动同步不采纳推荐 |
+| `repository-review.test.ts` | 9 项通过 | 660 组推荐初始化、共享引用联动、最新来源、无版本跳过、清除/恢复、单行/手动一致性及记忆隔离 |
+| `repository-report.test.ts` | 5 项通过 | 当前选择与推荐来源、未处理/手动/普通合并、正文排除、CSV 转义、错误版本拒绝、逻辑/真实/junction/共享源目录写入拒绝 |
+| `node tests/repository-desktop.cjs` | 通过 | 原有仓库初始化、双向合并、人工选择、备份、真实 junction、自动化配置与窄窗口回归 |
+| `node tests/repository-bulk-desktop.cjs` | 通过 | 660 个共享文件/1320 个引用：空仓库自动预选最新 Agent、筛选勾选/清除/恢复、跨 Agent 单选切换、CSV 不含正文、三处实际内容一致；仓库较旧时默认来源清单正确，批量采用仓库可覆盖推荐 |
+| 成品与构建一致性 | 通过 | 37 个 ASAR 编译文件逐字节一致，原生组件哈希一致，无效协议在 UIA 前拒绝；EXE 为 NotSigned |
+| 成品 `packaged.cjs` / `portable.cjs` | 通过 | v0.6.1 解包版与便携启动器实际打开窗口、沙箱、隔离配置、七个 Agent 与全部导航；默认未授予领取和通信权限 |
+
+已查看完整页及预览局部截图，推荐来源、原因、修改时间、当前选择和批量控件可读，无重叠。大批量 Windows 文件与 Git 写入超过自动点击的默认 30 秒等待，测试采用 300 秒上限，并等待预览刷新完成后断言；最终完整脚本退出码为 0。系统文件对话框和确认响应由测试替换，未修改用户的实际记忆、技能或运行中旧版实例。
+
+构建与回归入口：
+
+```powershell
+npm run build
+npm test
+node tests/repository-desktop.cjs
+node tests/repository-bulk-desktop.cjs
+npm run dist -- --config.directories.output=release-0.6.1
+node tests/packaged.cjs "release-0.6.1/win-unpacked/Agent Memory Console.exe"
+node tests/portable.cjs "release-0.6.1/Agent-Memory-Console-0.6.1-win-x64.exe"
+```
+
+## v0.6.0 历史验证（2026-10-26）
 
 本轮新增 MCP 模板共享、加密变量/配置备份与回滚，以及 A2A/MCP 文本消息桥。私有存储生产测试实际使用 Windows safeStorage/DPAPI；收发测试使用独立 Agent 身份、真实本机 HTTP 和模拟原生远端。原生对话框响应由测试替换，所有写入位于隔离目录。
 

@@ -8,6 +8,7 @@ import { createAdapters } from "./adapters";
 import { ConsoleService } from "./service";
 import { Processes } from "./processes";
 import { RepositoryService } from "./repository-service";
+import { assertRepositoryReportDestination, repositoryReport } from "./repository-report";
 import { RewardsService } from "./rewards-service";
 import { RewardsBalanceService } from "./rewards-balance";
 import { WindowsRewardsBridge } from "./rewards-windows";
@@ -327,6 +328,21 @@ function register() {
     repository.memoryFolder(agent,selected); return { message: "记忆目录已保存；自动同步已暂停，待重新启用" };
   });
   handler("repositoryPreview", () => repository.preview());
+  handler("repositoryExportPreview", async (id: unknown, choices: unknown) => {
+    const plan = repository.review(str(id));
+    const report = repositoryReport(plan, choices);
+    const chosen = await dialog.showSaveDialog(window, { title: "导出双向同步处理清单",
+      defaultPath: path.join(app.getPath("documents"), `agent-console-sync-${new Date().toISOString().slice(0, 10)}.csv`),
+      filters: [{name:"CSV 清单", extensions:["csv"]}] });
+    if (chosen.canceled || !chosen.filePath) return {message:"已取消清单导出"};
+    const destination = localPath(chosen.filePath);
+    if (path.extname(destination).toLowerCase() !== ".csv") throw new Error("清单必须保存为 .csv 文件");
+    service.assertWritablePath(destination); noLinks(destination); noLinks(path.dirname(destination));
+    assertRepositoryReportDestination(service.config, destination);
+    if (!fs.statSync(path.dirname(destination)).isDirectory() || fs.existsSync(destination) && !fs.lstatSync(destination).isFile()) throw new Error("清单目标必须是普通本地文件");
+    atomicWrite(destination, report);
+    return {message:`已导出 ${plan.files.length} 项处理清单，包含当前选择、来源和修改时间；不含文件正文`};
+  });
   handler("repositoryCancelPreview", () => { repository.cancelPreview(); return {message:"预览已关闭，自动任务可继续运行"}; });
   handler("repositoryApply", async (id: unknown, choices: Record<string,RepositoryResolution>) => {
     const plan = repository.review(str(id));

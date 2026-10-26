@@ -258,6 +258,9 @@ const git = require("isomorphic-git");
       repoMemory,
       merged.replace("unchanged center", "Repository conflict"),
     );
+    const conflictTime = Date.now() - 60000;
+    fs.utimesSync(localMemory, new Date(conflictTime), new Date(conflictTime));
+    fs.utimesSync(repoMemory, new Date(conflictTime + 30000), new Date(conflictTime + 30000));
     await preview.click();
     await page.locator(".repo-conflict-resolution").waitFor();
     assert.equal(
@@ -435,7 +438,7 @@ const git = require("isomorphic-git");
       .filter({ hasText: "asset.bin" })
       .filter({ hasText: "WorkBuddy" })
       .click();
-    assert.equal(await apply().isDisabled(), true);
+    assert.equal(await apply().isDisabled(), false, "missing shared repository binary should have one consistent default Agent source");
     assert.equal(await page.getByRole("button", { name: "仓库版本用于所有引用方", exact: true }).isDisabled(), true, "a missing repository binary cannot be selected as the winner");
     await page
       .getByRole("button", { name: "此 Agent 版本用于所有引用方", exact: true })
