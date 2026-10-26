@@ -2,7 +2,42 @@
 
 本地服务测试、真实 Electron 窗口测试和厂商集成验证分别记录。测试中的记忆、技能、脚本和 PE 字节均为人工夹具，不来自真实 Agent，也不执行技能脚本。
 
-## v0.5.0 本轮验证
+## v0.6.0 本轮验证（2026-10-26）
+
+本轮新增 MCP 模板共享、加密变量/配置备份与回滚，以及 A2A/MCP 文本消息桥。私有存储生产测试实际使用 Windows safeStorage/DPAPI；收发测试使用独立 Agent 身份、真实本机 HTTP 和模拟原生远端。原生对话框响应由测试替换，所有写入位于隔离目录。
+
+| 检查 | 结果 | 范围 |
+| --- | --- | --- |
+| `npm test` | 353 通过、2 跳过、0 失败（共 355 项） | 保留所有旧功能回归；跳过项仍为缺少文件符号链接权限，真实目录 junction 测试通过 |
+| MCP 文件服务 | 21 项通过 | 格式转换、凭据引用、严格 JSON、保留原配置、冲突、预览过期/失效、加密失败、回滚并发修改、损坏存储、精确 Git 范围 |
+| A2A/MCP 桥 | 34 项通过 | 独立身份/ACL、真实 HTTP 往返、协议版本、异步任务与阻塞等待、跨重启去重、终态重试、慢请求撤权、远端查询/取消/未知状态、DNS/IPv6/重定向与连接释放 |
+| 加密 codec | 2 项通过 | 系统不可用时失败关闭、版本信封、错误不泄露内容 |
+| `node tests/interop-runtime.cjs` | 通过 | 真实 Electron 主进程/preload/IPC + DPAPI、配置原文备份回滚、Git 不含私有值、两个 MCP 身份收发/领取/回复、第三身份隔离、A2A Card/Send/Get/List/版本、令牌轮换 |
+| `node tests/interop-ui.cjs` | 83 项断言通过 | UI 使用模拟 API；模板、密码输入、冲突、连接时间、ACL、远端配置、消息状态与人工回复、异步错误及 1000px 布局 |
+| `node tests/tasks-desktop.cjs` | 73 项断言通过 | 任务中心回归、9 项导航完整、1000px 无横溢 |
+| `node tests/desktop.cjs` | 通过 | 原有七个 Agent、npm/Qoder、记忆与技能权限、真实 junction 同步、备份恢复、导航和窄窗口 |
+| 成品 `interop-runtime.cjs` | 通过 | 实际 0.6.0 ASAR 的全部互联流程，随后重启验证 DPAPI 解密、消息/绑定/变量恢复、监听仍关闭、连接时间不伪造 |
+| 成品 `packaged.cjs` / `repository-packaged.cjs` | 通过 | 可见窗口、沙箱、初始互联权限全关、全部旧页面、打包 Git 初始化/提交/重启/内层仓库排除 |
+| 成品与构建一致性 | 通过 | 36 个 ASAR 编译文件与最终构建逐字节一致，原生桥组件 SHA-256 一致；无效原生协议在 UIA 前被拒绝 |
+| `node tests/portable.cjs` | 通过 | 0.6.0 单文件启动器成功解压并打开窗口，互联默认关闭、无凭据或新授权；EXE 的 Authenticode 状态为 NotSigned |
+
+已查看互联页截图：模板、通信桥、消息及窄窗口；示例消息、状态和账号均为人工夹具。**没有验证真实厂商客户端加载 MCP、模型主动轮询收件箱、真实公网 A2A 服务或账户费用；不把已部署配置/入队状态当作真实模型执行。** 客户端格式依据与接入步骤见 [互联说明](INTEROP.md)。
+
+本版关键验证命令：
+
+```powershell
+npm run build
+npm test
+node tests/interop-runtime.cjs
+node tests/interop-ui.cjs
+npm run dist -- --config.directories.output=release-0.6.0
+node tests/packaged.cjs "release-0.6.0/win-unpacked/Agent Memory Console.exe"
+node tests/interop-runtime.cjs "release-0.6.0/win-unpacked/Agent Memory Console.exe"
+node tests/repository-packaged.cjs "release-0.6.0/win-unpacked/Agent Memory Console.exe"
+node tests/portable.cjs "release-0.6.0/Agent-Memory-Console-0.6.0-win-x64.exe"
+```
+
+## v0.5.0 历史验证
 
 本轮增加任务中心、持久化总暂停、托盘常驻和本地报表。测试使用隔离配置；托盘运行测试替换系统托盘传输层，保留真实 Electron 主进程、preload、IPC、窗口生命周期和 PNG 解码。**未实际操作用户托盘、登录账号或厂商 UIA，不将模拟余额和领取计为真实账号验证。**
 

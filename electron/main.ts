@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, session } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell, session } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "node:path";
 import os from "node:os";
@@ -13,6 +13,11 @@ import { RewardsBalanceService } from "./rewards-balance";
 import { WindowsRewardsBridge } from "./rewards-windows";
 import { TaskCenterService } from "./task-center";
 import { TaskTray } from "./task-tray";
+import { createSecretCodec } from "./private-store";
+import { McpShareService } from "./mcp-share";
+import { AgentBridge } from "./agent-bridge";
+import type { McpProfile, McpBridgeDefinition } from "../src/mcp-types";
+import type { BridgeConfig, BridgeRemoteInput } from "../src/bridge-types";
 import type { TaskRuntime, TaskSources } from "../src/task-types";
 import type { RewardId } from "../src/rewards-types";
 import type { BalanceUnit } from "../src/rewards-balance-types";
@@ -38,6 +43,8 @@ let rewards: RewardsService;
 let balances: RewardsBalanceService;
 let tasks: TaskCenterService;
 let taskTray: TaskTray;
+let mcp: McpShareService;
+let bridge: AgentBridge;
 let quitting = false;
 let rewardCalibrationUntil = 0;
 let busy = false;
@@ -120,6 +127,87 @@ function handler(
   });
 }
 function register() {
+  handler("mcpSnapshot", () => mcp.snapshot(), false);
+  handler("mcpSaveTemplates", (json: string) => mcp.saveTemplates(json));
+  handler("mcpSetVariable", (name: string, value: string) => mcp.setVariable(name, value));
+  handler("mcpBind", async (id: unknown, profile: McpProfile) => {
+    const agentId = validId(id);
+    if (!["claude", "workbuddy", "trae", "qoder-cli", "qoder-ide", "generic"].includes(profile)) throw new Error("MCP 配置格式无效");
+    const home = !app.isPackaged && process.env.CONSOLE_TEST_HOME ? path.resolve(process.env.CONSOLE_TEST_HOME) : os.homedir();
+    const workspace = service.settings(agentId).workspace;
+    const known = profile === "claude" ? path.join(home, ".claude.json")
+      : profile === "workbuddy" ? path.join(home, ".workbuddy", "mcp.json")
+      : profile === "qoder-cli" ? path.join(home, ".qoder", "settings.json")
+      : profile === "trae" && workspace ? path.join(workspace, ".trae", "mcp.json") : path.join(home, "mcp.json");
+    const chosen = await dialog.showSaveDialog(window, { title: "选择或创建客户端 MCP JSON 配置文件", defaultPath: known,
+      filters: [{name:"JSON 配置", extensions:["json"]}], buttonLabel:"绑定此路径",
+      properties:["showOverwriteConfirmation", "createDirectory"] });
+    if (chosen.canceled || !chosen.filePath) return {message:"未更改 MCP 路径"};
+    return mcp.bind(agentId, profile, chosen.filePath);
+  });
+  handler("mcpPreview", (id: unknown, ids: string[], includeBridge: boolean) => {
+    const agentId = validId(id);
+    if (typeof includeBridge !== "boolean") throw new Error("桥接选项无效");
+    let definition: McpBridgeDefinition | undefined;
+    if (includeBridge) {
+      const connection = bridge.connection(agentId);
+      definition = {id:"agent-console-bridge", template:{transport:"http",url:connection.url,headers:{Authorization:"${CONSOLE_BRIDGE_AUTH}"}},
+        variables:{CONSOLE_BRIDGE_AUTH:connection.headers.Authorization}};
+    }
+    return mcp.preview(agentId, ids, definition);
+  });
+  handler("mcpApply", async (id: string, overwrite: string[]) => {
+    const plan = mcp.getPlan(id);
+    if (!Array.isArray(overwrite) || overwrite.some(name => typeof name !== "string" || !plan.items.some(item => item.id === name && item.action === "conflict")))
+      throw new Error("MCP 冲突选择无效");
+    const additions = plan.items.filter(item => item.action === "add").map(item => item.id);
+    if (!(await confirm("部署 MCP 配置", `目标：${plan.file}\n格式：${plan.profile}\n新增：${additions.join("、") || "无"}\n覆盖：${overwrite.join("、") || "无"}\n\n保留其他配置及未选择覆盖的同名服务，先创建本机加密备份。客户端加载 stdio 配置后可能启动该模板指定的程序；请确认模板可信。`)))
+      return {message:"已取消 MCP 部署"};
+    return mcp.apply(id, overwrite);
+  });
+  handler("mcpRollback", async (id: string) => {
+    const deployment = mcp.getDeployment(id);
+    if (!(await confirm("回滚上次 MCP 部署", `目标：${deployment.file}\n部署时间：${deployment.at}\n\n仅在文件仍与此次部署结果完全相同时恢复备份。客户端后续已修改文件时拒绝回滚。`)))
+      return {message:"已取消回滚"};
+    return mcp.rollback(id);
+  });
+  handler("bridgeSnapshot", () => bridge.snapshot(), false);
+  handler("bridgeConfigure", async (config: BridgeConfig) => {
+    if (!config || !Array.isArray(config.agents) || config.agents.length > service.adapters.length || !Number.isInteger(config.port)) throw new Error("互联桥设置无效");
+    const lines = config.agents.map(item => {
+      const id = validId(item?.id);
+      if (typeof item.enabled !== "boolean" || !Array.isArray(item.allowTargets) || item.allowTargets.length > service.adapters.length + 50 || item.allowTargets.some(target => typeof target !== "string" || target.length > 100)) throw new Error("消息权限无效");
+      return `${service.adapter(id).name}：${item.enabled ? "启用 → " + (item.allowTargets.join("、") || "不允许发送") : "关闭"}`;
+    });
+    if (!(await confirm("保存 Agent 消息权限", `本机端口：${config.port}\n${lines.join("\n")}\n\n启用的 Agent 使用各自的令牌收取消息。发送只允许上方列出的目标；模型需要主动调用 MCP 工具。本操作不授予自动运行 CLI 的权限。`)))
+      return {message:"未更改消息权限"};
+    const result = await bridge.configure(config); mcp.invalidatePlans(); return result;
+  });
+  handler("bridgeStart", async () => { const result = await bridge.start(); mcp.invalidatePlans(); return result; });
+  handler("bridgeStop", async () => { const result = await bridge.stop(); mcp.invalidatePlans(); return result; });
+  handler("bridgeRotateToken", async (value: unknown) => {
+    const id = validId(value);
+    if (!(await confirm("轮换 Agent 互联令牌", `${service.adapter(id).name}\n旧令牌将立即失效。请重新部署或复制该 Agent 的桥 MCP 配置，并在客户端重新连接。`))) return {message:"未轮换令牌"};
+    const result = bridge.rotateToken(id); mcp.invalidatePlans(); return result;
+  });
+  handler("bridgeCopyConnection", (value: unknown) => {
+    const connection = bridge.connection(validId(value));
+    clipboard.writeText(JSON.stringify({mcpServers:{"agent-console-bridge":{type:"http",url:connection.url,headers:connection.headers}}}, null, 2));
+    return {message:"已复制含私有令牌的 HTTP MCP 配置；仅粘贴到该 Agent 的本机配置，勿分享或提交 Git。其他客户端格式可在共享 MCP 页部署。"};
+  });
+  handler("bridgeSaveRemote", async (input: BridgeRemoteInput) => {
+    if (!input || typeof input.endpoint !== "string" || input.endpoint.length > 2000 || typeof input.name !== "string" || input.name.length > 120) throw new Error("远端参数无效");
+    let endpoint: URL;
+    try { endpoint = new URL(input.endpoint); } catch { throw new Error("远端地址无效"); }
+    if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error("远端地址不能含凭据、查询串或片段");
+    if (!(await confirm("登记原生 A2A 远端", `名称：${input.name}\n端点：${endpoint.href}\n\n取得发送权限的 Agent 可将消息发送到此服务。仅支持 A2A 1.0 JSON-RPC 文本；远端令牌单独加密保存在本机。`))) return {message:"未更改远端"};
+    return bridge.saveRemote(input);
+  });
+  handler("bridgeRemoveRemote", (id: string) => bridge.removeRemote(id));
+  handler("bridgeSend", input => bridge.send(input));
+  handler("bridgeReply", input => bridge.reply(input));
+  handler("bridgeCancel", (id: string) => bridge.cancel(id));
+  handler("bridgeRefreshTask", (id: string) => bridge.refreshTask(id));
   handler("taskControlsSnapshot", () => ({ controls: tasks.controls(), runtime: taskRuntime() }), false);
   handler("taskCenterSnapshot", () => tasks.snapshot(taskSources(), taskRuntime()), false);
   // Pausing must remain available while an in-flight operation holds the shared lock.
@@ -450,6 +538,9 @@ else {
         : path.join(app.getAppPath(), "native", "bin", "RewardBridge.exe"));
       balances = new RewardsBalanceService(service, rewardsBridge);
       tasks = new TaskCenterService(service);
+      const privateCodec = createSecretCodec(safeStorage);
+      mcp = new McpShareService(service, privateCodec);
+      bridge = new AgentBridge(service, privateCodec);
       rewards = new RewardsService(service, rewardsBridge, undefined, undefined, async (id, reason) => {
         if (balances.isConfigured(id)) await balances.refresh(id, reason);
       });
@@ -504,7 +595,7 @@ else {
           .then(() => tasks.canRunAutomatic() && Date.now() >= rewardCalibrationUntil ? rewards.tick() : undefined).catch(error => console.error("Rewards automatic task failed:", String(error)))
           .then(() => tasks.canRunAutomatic() && Date.now() >= rewardCalibrationUntil ? balances.tick() : undefined).catch(error => console.error("Balance automatic task failed:", String(error))).finally(() => { busy = false; });
       }, 5000);
-      app.once("will-quit", () => { clearInterval(repositoryTimer); taskTray.destroy(); });
+      app.once("will-quit", () => { clearInterval(repositoryTimer); taskTray.destroy(); void bridge.stop().catch(() => {}); });
       app.on("before-quit", (event) => {
         quitting = true;
         if (busy) {

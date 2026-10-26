@@ -1,6 +1,6 @@
 # Agent Memory Console
 
-用于 Windows 的本地 Agent 管理控制台，采用 Electron、React 和 TypeScript。深色界面提供七个 Agent 卡片、独立 Git 记忆与技能仓库、双向合并、定时同步、技能 junction 连接、备份与活动日志。v0.4.0 在“积分福利”中增加验证后自动领取、九个平台独立的余额校准与定时监控、低余额提示和采样历史；v0.5.0 新增任务中心、统一暂停、托盘常驻和本地 CSV 报表。四个平台提供可校准的免费领取流程；其他平台按实际能力说明。原有单文件共享源作为兼容模式保留。
+用于 Windows 的本地 Agent 管理控制台，采用 Electron、React 和 TypeScript。深色界面提供七个 Agent 卡片、独立 Git 记忆与技能仓库、双向合并、定时同步、技能 junction 连接、备份与活动日志。v0.4.0 在“积分福利”中增加验证后自动领取、九个平台独立的余额校准与定时监控、低余额提示和采样历史；v0.5.0 新增任务中心、统一暂停、托盘常驻和本地 CSV 报表。v0.6.0 新增共享 MCP 模板、加密私有变量与部署回滚，以及 A2A 文本消息桥。四个平台提供可校准的免费领取流程；其他平台按实际能力说明。原有单文件共享源作为兼容模式保留。
 
 这是可运行的本地文件与进程管理工程。Claude Code CLI 按官方文档适配用户级记忆、技能路径及单次任务；v0.2.2 新增 Qoder 的用户技能、CLI 静态指令候选和 IDE EXE 启动，未接入 Qoder CLI 任务或 IDE 自动记忆。WorkBuddy、TRAE、DeepSeek Harness、智谱 Zcode、千问 Work 使用候选路径或手动绑定，尚未验证厂商协议兼容性。界面不会把文件发现结果显示成登录、额度或会话状态。完整范围见 [集成说明](docs/INTEGRATIONS.md)。
 
@@ -8,11 +8,11 @@
 
 ## 运行
 
-便携单文件版可直接双击 `Agent-Memory-Console-0.5.0-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.5.0-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
+便携单文件版可直接双击 `Agent-Memory-Console-0.6.0-win-x64.exe` 启动，无需另装 Electron。控制台自身不需要 Node.js；旧版 npm Claude 的 `cli.js` 仍需使用本机 Node.js。启动器每次会先解压运行文件，期间没有进度窗口，旧版在本机观察到约 30 秒等待；需要更快启动时使用下方解包版。默认构建位置为 `release/Agent-Memory-Console-0.6.0-win-x64.exe`，本版成品验证状态见 [测试说明](docs/TESTING.md)。
 
 已取得解包版时，无需安装 Node.js：保留 `win-unpacked` 整个目录及其中所有资源，双击目录内的 `Agent Memory Console.exe`。不能只复制这一个 EXE，或直接在压缩包预览窗口内运行它。积分福利还依赖随包的 `resources/rewards/RewardBridge.exe` 与 Windows .NET Framework 组件，不能删除这个资源目录。工程中的对应位置为 `release/win-unpacked/`。
 
-本版建议将成品输出到 `release-0.5.0/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.5.0/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
+本版建议将成品输出到 `release-0.6.0/`，避免覆盖仍在运行的旧版目录。请先退出旧版，再打开 `release-0.6.0/win-unpacked/Agent Memory Console.exe`；原有用户配置会继续使用。自行重新打包默认仍输出到 `release/`。
 
 从源码运行或重新打包时，按以下步骤操作。
 
@@ -37,6 +37,12 @@ npm start
 ```
 
 `npm start` 使用已有构建结果，不会自动编译。首次安装需下载 npm 包及 Electron 运行时；打包还可能下载构建工具。项目 `.npmrc` 使用 npm 官方源，并将 npm 缓存设置为工程内的 `.cache/npm`，相对于本工程解析；`.cache/` 已加入 Git 忽略规则。请将工程解压到当前用户可写的位置。
+
+## MCP 共享与 Agent 互联（v0.6.0）
+
+新增“MCP 与互联”页面。共享模板位于独立仓库的 `mcp/servers.json`，按客户端格式预览合并，保留已有设置并提供加密备份回滚。私有变量和桥令牌不进入 Git。
+
+互联桥默认关闭，只监听本机；逐个启用 Agent 并设置允许发送的目标，再把桥 MCP 部署到客户端。支持 A2A 1.0 文本任务及登记原生远端。普通客户端通过 MCP 工具主动收件和回复，不能把“投递成功”当作模型已经执行。具体接入步骤、支持格式和限制见 [MCP 与 A2A 使用说明](docs/INTEROP.md)。
 
 ## 第一次使用
 
@@ -116,7 +122,7 @@ Claude Code 支持原生 Windows CLI 和 `npm install -g @anthropic-ai/claude-co
 
 npm 自动发现检查环境中的 npm prefix、`%APPDATA%\npm`、nvm 路径和最多 128 个 PATH 目录，不执行 npm 或启动脚本。支持包内 `bin/claude.exe` 和旧版 `cli.js` + Node.js 两种结构，直接启动解析后的程序，适用于带空格的自定义安装目录。安装入口或 Node 路径变化后需重新授权；未知包结构会明确拒绝。
 
-两种安装方式都使用固定参数 `-p`，任务经标准输入传入，展示输出和退出码。控制台不会安装 Claude、代管密钥或绕过 Claude 的权限规则。任务可能联网、产生费用或修改工作目录中的文件；确认启动前请阅读任务内容。
+两种安装方式都使用固定参数 `-p`，任务经标准输入传入，展示输出和退出码。控制台不会安装 Claude、读取其登录凭据或绕过 Claude 的权限规则。任务可能联网、产生费用或修改工作目录中的文件；确认启动前请阅读任务内容。
 
 `claude.cmd` 仅用于定位受支持的 npm 包，不读取或执行脚本正文。不执行任意 `.cmd`、`.bat`、PowerShell 脚本、快捷方式或命令字符串。除 Claude 外的六个适配器仍只接受 EXE。控制台只追踪自己启动的直接子进程。“停止所属进程”不会结束外部已运行程序或整个进程树；桌面程序启动器退出后，独立运行的应用状态可能未知。关闭控制台后也不能恢复此前的进程追踪。
 
@@ -194,7 +200,7 @@ node tests/portable.cjs
 | `npm run pack` | 构建 Windows x64 解包版，输出至 `release/win-unpacked/` |
 | `node tests/packaged.cjs` | 启动上述解包成品并检查打包状态、沙箱、原生接口和页面切换；使用独立测试配置目录 |
 | `node tests/repository-packaged.cjs "成品 EXE 路径"` | 检查 ASAR 内嵌 Git 初始化、文本和二进制提交、重启后的历史及版本读取；使用独立仓库，不授权 Agent |
-| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.5.0-win-x64.exe` |
+| `npm run dist` | 构建便携 EXE，输出 `release/Agent-Memory-Console-0.6.0-win-x64.exe` |
 | `node tests/portable.cjs` | 启动便携单文件成品并检查自动解压、隔离配置、原生接口和页面切换 |
 
 打包后的应用携带 Electron 和 `resources/rewards/RewardBridge.exe`，用户运行时不需要 Node.js；积分桥接使用 Windows 的 .NET Framework 运行环境。源码直接运行时则需要完整的 `native/bin/RewardBridge.exe` 构建产物。便携版不等于数据随 EXE 存放：数据仍写入 Windows 用户数据目录。此工程没有配置代码签名、自动更新或安装器；Windows 可能对未签名程序显示提示。项目测试不代表已完成七家厂商客户端的真实账户端到端测试。
@@ -220,7 +226,7 @@ console-data/
   repository-data/<仓库标识>/  统一仓库的同步状态、共同版本、备份和连接回执
 ```
 
-控制台没有云端同步或遥测实现。配置、日志、备份和余额历史为本机明文；应按原始资料的敏感程度保护。日志含路径、操作结果及余额采样数值，不保存任务正文；CLI 输出仅保留在当前进程内存，最多 32,000 字符。积分与余额配置保存选定窗口标题和控件文案，不读取或保存 API Key、密码输入框、登录令牌或客户端凭据文件；可见文案仍可能含个人信息。打开官方活动链接及客户端领取会使用浏览器或第三方客户端的网络连接。
+控制台没有云端文件同步或遥测实现。显式发送到登记的 A2A 远端会传输消息正文。原有记忆/技能配置、日志、备份和余额历史为本机明文；新增 MCP 私有变量、配置备份及桥令牌/消息正文使用 Windows 加密存储。客户端配置可能仍包含明文凭据，应按原始资料的敏感程度保护。日志含路径、操作结果及余额采样数值，不保存任务正文；CLI 输出仅保留在当前进程内存，最多 32,000 字符。积分与余额配置保存选定窗口标题和控件文案，不读取或保存 API Key、密码输入框、登录令牌或客户端凭据文件；可见文案仍可能含个人信息。打开官方活动链接及客户端领取会使用浏览器或第三方客户端的网络连接。
 
 ## 常见问题
 

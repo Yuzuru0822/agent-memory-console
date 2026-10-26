@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import git from "isomorphic-git";
-import { localPath, noLinks, within } from "./safety";
+import { localPath, noLinks, readText, within } from "./safety";
+import { parseManifest } from "./mcp-share-format";
 
 export const REPOSITORY_MARKER = ".agent-console-repository.json";
 const OWNER = "agent-memory-console";
@@ -50,11 +51,11 @@ function relativeFile(value: string): string {
 function allowedFile(value: string): boolean {
   relativeFile(value);
   return value === "README.md" || value === REPOSITORY_MARKER ||
-    value.startsWith("memories/") || value.startsWith("skills/");
+    value.startsWith("memories/") || value.startsWith("skills/") || value === "mcp/servers.json";
 }
 
 function statusFilter(value: string): boolean {
-  return value === "." || value === "memories" || value === "skills" || allowedFile(value);
+  return value === "." || value === "memories" || value === "skills" || value === "mcp" || allowedFile(value);
 }
 
 /** Every operation rechecks containment and all parent links, including .git. */
@@ -191,7 +192,7 @@ async function validateTracked(client: ReturnType<typeof confinedFs>, root: stri
         if (!entry) continue;
         const mode = await entry.mode();
         if (await entry.type() === "tree") {
-          if (name !== "." && name !== "memories" && name !== "skills" &&
+          if (name !== "." && name !== "memories" && name !== "skills" && name !== "mcp" &&
               !name.startsWith("memories/") && !name.startsWith("skills/"))
             throw new Error(`Git 含有管理范围外的目录：${name}`);
           if (name !== ".") relativeFile(name);
@@ -238,8 +239,14 @@ export async function commitRepository(input: string, message: string): Promise<
     const client = owned(root);
     const head = await validHead(client, root);
     await validateTracked(client, root, head);
+    const mcpManifest = path.join(root, "mcp", "servers.json");
+    if (fs.existsSync(mcpManifest)) {
+      if (fs.statSync(mcpManifest).size > 1024 * 1024 || fs.statSync(mcpManifest).nlink !== 1)
+        throw new Error("MCP 模板必须是不超过 1 MiB 的普通独立文件");
+      parseManifest(readText(mcpManifest).toString("utf8"));
+    }
     const rows = await git.statusMatrix({ fs: client, dir: root, ignored: true, refresh: false,
-      filepaths: ["README.md", REPOSITORY_MARKER, "memories", "skills"],
+      filepaths: ["README.md", REPOSITORY_MARKER, "memories", "skills", "mcp/servers.json"],
       filter: statusFilter });
     const changed = rows.filter(([, h, w, s]) => h !== w || h !== s);
     if (!changed.length && head) return { oid: head, changed: false };
@@ -270,7 +277,7 @@ export async function repositoryStatus(input: string): Promise<{ branch: string;
     const client = owned(root);
     await validateTracked(client, root, await validHead(client, root));
     const rows = await git.statusMatrix({ fs: client, dir: root, ignored: true, refresh: false,
-      filepaths: ["README.md", REPOSITORY_MARKER, "memories", "skills"],
+      filepaths: ["README.md", REPOSITORY_MARKER, "memories", "skills", "mcp/servers.json"],
       filter: statusFilter });
     return { branch: "main", dirty: rows.filter(([, h, w, s]) => h !== w || h !== s).length };
   });

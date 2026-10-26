@@ -4,6 +4,8 @@ import type { RepositoryApi, RepositoryConfig } from "./repository-types";
 import type { RewardsApi } from "./rewards-types";
 import type { RewardBalancesApi } from "./rewards-balance-types";
 import type { TasksApi } from "./task-types";
+import type { McpApi } from "./mcp-types";
+import type { BridgeApi } from "./bridge-types";
 
 export interface SkillAccess {
   root: string;
@@ -129,7 +131,7 @@ export interface Plan {
 export interface Result {
   message: string;
 }
-export interface ConsoleApi extends RepositoryApi, RewardsApi, RewardBalancesApi, TasksApi {
+export interface ConsoleApi extends RepositoryApi, RewardsApi, RewardBalancesApi, TasksApi, McpApi, BridgeApi {
   snapshot(): Promise<Snapshot>;
   pick(id: AgentId | null, kind: PickKind): Promise<Result>;
   approveNpm(): Promise<Result>;

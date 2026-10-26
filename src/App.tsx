@@ -30,6 +30,7 @@ import {
   ListChecks,
   LoaderCircle,
   LockKeyhole,
+  Network,
   Pause,
   Play,
   Plus,
@@ -46,15 +47,17 @@ import type { AgentId, AgentView, PathKind, Plan, Snapshot, SkillsInfo } from ".
 import RepositoryPanel from "./RepositoryPanel";
 import RewardsPanel from "./RewardsPanel";
 import TaskCenterPanel from "./TaskCenterPanel";
+import InteropPanel from "./InteropPanel";
 import type { TaskControlsSnapshot } from "./task-types";
 
 const api = window.consoleApi;
-type Tab = "overview" | "tasks" | "repository" | "rewards" | "sync" | "backups" | "activity" | "integrations";
+type Tab = "overview" | "tasks" | "repository" | "rewards" | "interop" | "sync" | "backups" | "activity" | "integrations";
 const nav = [
   { id: "overview", name: "监控总览", icon: LayoutDashboard },
   { id: "tasks", name: "任务中心", icon: ListChecks },
   { id: "repository", name: "统一仓库", icon: Database },
   { id: "rewards", name: "积分福利", icon: Gift },
+  { id: "interop", name: "MCP 与互联", icon: Network },
   { id: "sync", name: "记忆与技能", icon: Layers3 },
   { id: "backups", name: "备份快照", icon: History },
   { id: "activity", name: "活动台账", icon: Activity },
@@ -475,7 +478,7 @@ export default function App() {
               onClick={() => setTab(n.id)}
             >
               <n.icon size={21} />
-              <span>{n.name.slice(0, 2)}</span>
+              <span>{n.id === "interop" ? "互联" : n.name.slice(0, 2)}</span>
             </button>
           ))}
         </div>
@@ -493,7 +496,7 @@ export default function App() {
           </span>
           <span className="local-label">
             <LockKeyhole size={12} />
-            本地执行 · 无云端上传
+            本地管理 · 按授权互联
           </span>
         </div>
         <header>
@@ -852,6 +855,7 @@ export default function App() {
             )}
             {tab === "repository" && <RepositoryPanel onChange={refresh} />}
             {tab === "rewards" && <RewardsPanel />}
+            {tab === "interop" && <InteropPanel onRepository={() => setTab("repository")} />}
             {tab === "tasks" && <TaskCenterPanel onNavigate={setTab} onControls={snapshot => { setTaskControls(snapshot); setTaskControlsError(undefined); }} />}
             {tab === "sync" && (
               <>
@@ -1100,7 +1104,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.5.0</b>
+                AGENT MEMORY CONSOLE <b>v0.6.0</b>
               </span>
             </footer>
           </>

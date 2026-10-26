@@ -142,6 +142,16 @@ Node 只启动固定路径的 `RewardBridge.exe`，通过 stdin/stdout 传输单
 
 同步计划、积分窗口观察、当前子进程对象与 CLI 输出只保留在内存。关闭应用时若仍有所属进程，会要求用户返回或放弃追踪；应用不会自动杀死这些进程。
 
+## MCP 与 A2A 服务
+
+v0.6.0 的 `McpShareService` 管理共享 `mcp/servers.json`、私有变量与客户端绑定。格式层独立校验模板并转换 Claude、WorkBuddy、TRAE、Qoder CLI/IDE 或通用 JSON。部署是“受限预览 → 加密备份 → 原子合并”，不共享整份配置文件、不自动运行 stdio 程序。Git 的可跟踪范围只增加这一个模板文件，私有状态始终留在 userData。
+
+`AgentBridge` 独立提供本机 HTTP MCP 和 A2A 1.0 JSON-RPC。MCP 身份由令牌确定，7 个固定工具读写协作收件箱；A2A SendMessage/GetTask/ListTasks/CancelTask 映射到同一持久任务状态。只有接收方调用 claim 后才记为已接收，回复后才有完成证据；UI 人工回复记录 `console-user`。
+
+`agent-bridge-network.ts` 负责显式登记远端的 DNS/地址检查、固定连接、超时和响应限额。远端发送前保留未知状态，结果返回后保存远端任务映射；不重试不确定发送。`private-store.ts` 注入加密接口：测试可以使用隔离 codec，生产在 Electron ready 后接 safeStorage。主进程只通过固定 IPC 暴露快照、配置、文件选择、部署确认和消息动作，复制令牌配置必须由用户显式点击。
+
+监听默认关闭、重启不自动恢复。入口停止与自动任务暂停分别控制；应用退出时关闭监听，已持久化任务不会因此删除。没有自动唤醒厂商 GUI、入站 CLI 执行、通用插件装载或任意 HTTP 代理。详细协议契约和支持范围见 [互联说明](INTEROP.md)。
+
 ## 添加适配器
 
 当前扩展方式是编辑源码后重新构建，没有加载任意第三方插件代码的机制。
@@ -161,6 +171,6 @@ Node 只启动固定路径的 `RewardBridge.exe`，通过 stdin/stdout 传输单
 
 开发和生产构建都运行 `build:rewards`，使用系统 `%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` 及其 .NET Framework/WPF 引用；不下载编译器或执行 UIA。缺少系统组件时 Windows 构建失败，非 Windows 构建明确跳过桥接。完整要求见 [运行说明](../README.md)。
 
-`npm run pack` 与 `npm run dist` 使用 electron-builder 输出 Windows x64 解包目录及 v0.5.0 便携 EXE；构建直接使用 `node_modules/electron/dist` 的已安装运行时，并将原生桥接复制到 `resources/rewards/`。解包成品使用 `node tests/packaged.cjs`，便携单文件使用 `node tests/portable.cjs` 验证启动。依赖由 `package-lock.json` 锁定，使用 `npm ci` 安装，Electron 当前固定为 `45.0.0`。写入测试使用隔离数据；覆盖、成品只读发现范围与结果见 [测试说明](TESTING.md)。真实账号的领取、到账与余额读取仍未验证。
+`npm run pack` 与 `npm run dist` 使用 electron-builder 输出 Windows x64 解包目录及 v0.6.0 便携 EXE；构建直接使用 `node_modules/electron/dist` 的已安装运行时，并将原生桥接复制到 `resources/rewards/`。解包成品使用 `node tests/packaged.cjs`，便携单文件使用 `node tests/portable.cjs` 验证启动。依赖由 `package-lock.json` 锁定，使用 `npm ci` 安装，Electron 当前固定为 `45.0.0`。写入测试使用隔离数据；覆盖、成品只读发现范围与结果见 [测试说明](TESTING.md)。真实账号的领取、到账与余额读取仍未验证。
 
 开发模式提供 `CONSOLE_TEST_DATA` 和 `CONSOLE_TEST_HOME` 环境变量供测试隔离数据与用户目录；打包应用不接受这两项覆盖。请勿把测试变量配置在日常启动环境中。
