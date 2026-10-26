@@ -25,6 +25,7 @@ import type {
   RepositoryAutomation,
   RepositoryFile,
   RepositoryPlan,
+  RepositoryProgress,
   RepositoryResolution,
   RepositorySnapshot,
 } from "./repository-types";
@@ -38,6 +39,51 @@ const stamp = (value?: string | number) =>
     : "尚未运行";
 const sameIds = (a: AgentId[], b: AgentId[]) =>
   [...a].sort().join(",") === [...b].sort().join(",");
+const REVIEW_PAGE_SIZE = 100;
+
+function ReviewPager({ label, page, total, onPage }: {
+  label: string; page: number; total: number; onPage: (page: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(total / REVIEW_PAGE_SIZE));
+  return <nav className="repo-pagination" aria-label={`${label}分页`}>
+    <span>{total ? page * REVIEW_PAGE_SIZE + 1 : 0}–{Math.min((page + 1) * REVIEW_PAGE_SIZE, total)} / {total} 项</span>
+    <div>
+      <button className="small" aria-label={`${label}上一页`} disabled={page === 0} onClick={() => onPage(page - 1)}>上一页</button>
+      <label>第 <select aria-label={`${label}跳转页`} value={page} onChange={event => onPage(Number(event.target.value))}>
+        {Array.from({ length: pages }, (_, index) => <option key={index} value={index}>{index + 1}</option>)}
+      </select> / {pages} 页</label>
+      <button className="small" aria-label={`${label}下一页`} disabled={page >= pages - 1} onClick={() => onPage(page + 1)}>下一页</button>
+    </div>
+  </nav>;
+}
+
+/** This small status component owns its clock so large review lists do not rerender each second. */
+export function RepositoryProgressStatus({ progress, onOpen, onDismiss }: {
+  progress: RepositoryProgress; onOpen: () => void; onDismiss: () => void;
+}) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (progress.state !== "running") return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [progress.id, progress.state]);
+  const elapsed = Math.max(0, Math.floor(((progress.state === "running" ? now : Date.parse(progress.updatedAt)) - Date.parse(progress.startedAt)) / 1000));
+  const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒` : `${elapsed} 秒`;
+  const hasTotal = progress.total !== undefined && progress.total > 0 && progress.completed !== undefined;
+  return <aside className={`repo-global-progress ${progress.state}`} aria-label="仓库后台任务状态" role={progress.state === "failed" ? "alert" : "status"}>
+    {progress.state === "running" ? <LoaderCircle size={20} className="spin" /> : progress.state === "failed" ? <AlertCircle size={20} /> : <Check size={20} />}
+    <div className="repo-progress-body">
+      <div className="repo-progress-heading"><strong>{progress.operation} · {progress.phase}</strong><span>{progress.completed !== undefined && `${progress.completed}${hasTotal ? ` / ${progress.total}` : ""} 项 · `}已用时 {elapsedText}</span></div>
+      {progress.message && <p>{progress.message}</p>}
+      {progress.currentFile && <p className="repo-progress-file" title={progress.currentFile}>{progress.currentFile}</p>}
+      {progress.state === "running" && <p className="repo-progress-hint">正在后台执行，可以切换页面；写入过程中请保持应用运行。</p>}
+      {progress.state === "running" && hasTotal && <progress aria-label="当前同步阶段进度" max={progress.total} value={Math.min(progress.completed!, progress.total!)} />}
+    </div>
+    <button className="small" onClick={onOpen}>查看统一仓库<ArrowRight size={13} /></button>
+    {progress.state !== "running" && <button className="icon-button" aria-label="关闭仓库后台任务状态" onClick={onDismiss}><X size={15} /></button>}
+  </aside>;
+}
 
 function RepoPath({ value }: { value?: string }) {
   return (
@@ -79,8 +125,10 @@ function FileVersion({
 
 export default function RepositoryPanel({
   onChange,
+  progress,
 }: {
   onChange: () => Promise<void>;
+  progress?: RepositoryProgress;
 }) {
   const [snapshot, setSnapshot] = useState<RepositorySnapshot>();
   const [ids, setIds] = useState<AgentId[]>([]);
@@ -96,6 +144,8 @@ export default function RepositoryPanel({
   const [reviewFilter, setReviewFilter] = useState("all");
   const [checkedFiles, setCheckedFiles] = useState<Set<string>>(new Set());
   const [batchNotice, setBatchNotice] = useState("");
+  const [reviewPage, setReviewPage] = useState(0);
+  const [recommendationPage, setRecommendationPage] = useState(0);
   const [junction, setJunction] = useState<JunctionView>();
   const [junctionChoices, setJunctionChoices] = useState<
     Record<string, "agent" | "repository">
@@ -105,8 +155,10 @@ export default function RepositoryPanel({
   const lastSnapshot = useRef<RepositorySnapshot | undefined>(undefined);
   const loaded = useRef(false);
   const mounted = useRef(true);
+  const backgroundRunning = useRef(false);
+  backgroundRunning.current = progress?.state === "running";
 
-  async function refresh(reset = false, afterMutation = false) {
+  async function refresh(reset = false, afterMutation = false, fresh = true) {
     if (!api) return;
     if (refreshing.current) {
       await refreshing.current;
@@ -114,7 +166,7 @@ export default function RepositoryPanel({
     }
     const operation = (async () => {
       try {
-        const next = await api.repositorySnapshot();
+        const next = await api.repositorySnapshot(fresh);
         if (!mounted.current) return;
         const previous = lastSnapshot.current;
         const nextIds = next.members
@@ -153,7 +205,9 @@ export default function RepositoryPanel({
   useEffect(() => {
     mounted.current = true;
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 10000);
+    const timer = window.setInterval(() => {
+      if (!backgroundRunning.current) void refresh(false, false, false);
+    }, 10000);
     return () => {
       mounted.current = false;
       window.clearInterval(timer);
@@ -190,7 +244,7 @@ export default function RepositoryPanel({
   const automationDirty =
     !!snapshot &&
     JSON.stringify(automation) !== JSON.stringify(snapshot.automation);
-  const working = busy || !!snapshot?.running;
+  const working = busy || !!snapshot?.running || progress?.state === "running";
   const reviewIndex = useMemo(() => indexRepositoryReview(plan?.files || []), [plan]);
   const memberNames = useMemo(() => new Map(snapshot?.members.map(member => [member.id, member.name]) || []), [snapshot?.members]);
   const visibleFiles = useMemo(() => {
@@ -207,11 +261,15 @@ export default function RepositoryPanel({
     const source = file?.recommendation && reviewIndex.files.get(file.recommendation.sourceKey);
     return file && source ? [{ file, source, group }] : [];
   }), [reviewIndex]);
+  const currentReviewPage = Math.min(reviewPage, Math.max(0, Math.ceil(visibleFiles.length / REVIEW_PAGE_SIZE) - 1));
+  const pageFiles = visibleFiles.slice(currentReviewPage * REVIEW_PAGE_SIZE, (currentReviewPage + 1) * REVIEW_PAGE_SIZE);
+  const currentRecommendationPage = Math.min(recommendationPage, Math.max(0, Math.ceil(recommendations.length / REVIEW_PAGE_SIZE) - 1));
+  const pageRecommendations = recommendations.slice(currentRecommendationPage * REVIEW_PAGE_SIZE, (currentRecommendationPage + 1) * REVIEW_PAGE_SIZE);
   const unresolved =
     plan?.files.filter((file) => file.conflict && !resolutions[file.key])
       .length || 0;
   const currentFile =
-    visibleFiles.find((file) => file.key === fileKey) || visibleFiles[0];
+    pageFiles.find((file) => file.key === fileKey) || pageFiles[0];
   const junctionUnresolved =
     junction?.files.filter(
       (file) => file.conflict && !junctionChoices[file.relative],
@@ -306,6 +364,8 @@ export default function RepositoryPanel({
       setResolutions(recommendedReviewResolutions(indexRepositoryReview(next.files)));
       setReviewSearch("");
       setReviewFilter("all");
+      setReviewPage(Math.floor(Math.max(0, next.files.findIndex(file => file.conflict)) / REVIEW_PAGE_SIZE));
+      setRecommendationPage(0);
       setCheckedFiles(new Set());
       setBatchNotice("");
       setJunction(undefined);
@@ -616,11 +676,11 @@ export default function RepositoryPanel({
               <div className="repo-recommendation-table">
                 <table>
                   <thead><tr><th>文件 / 引用方</th><th>推荐来源</th><th>原因</th><th>Agent 修改时间</th><th>仓库修改时间</th><th>当前选择</th></tr></thead>
-                  <tbody>{recommendations.map(({ file, source, group }) => {
+                  <tbody>{pageRecommendations.map(({ file, source, group }) => {
                     const selected = resolutions[file.key];
                     const selectedAgent = selected?.choice === "agent" ? reviewIndex.files.get(selected.sourceKey || file.key) : undefined;
                     return <tr key={file.key}>
-                      <td><button className="repo-manifest-file" onClick={() => { setReviewSearch(""); setReviewFilter("all"); setFileKey(file.key); }}>{file.relative}</button><small>{group.map(item => memberNames.get(item.agent) || item.agent).join("、")}</small></td>
+                      <td><button className="repo-manifest-file" onClick={() => { setReviewSearch(""); setReviewFilter("all"); setReviewPage(Math.floor(Math.max(0, plan.files.findIndex(item => item.key === file.key)) / REVIEW_PAGE_SIZE)); setFileKey(file.key); }}>{file.relative}</button><small>{group.map(item => memberNames.get(item.agent) || item.agent).join("、")}</small></td>
                       <td>{memberNames.get(source.agent) || source.agent}</td>
                       <td>{file.recommendation?.reason === "repository-missing" ? "仓库没有该文件" : "Agent 比仓库更新"}{file.recommendation?.tied && <small className="repo-time-tie">多个 Agent 时间相同，已按固定顺序选择</small>}</td>
                       <td>{source.localModifiedMs === undefined ? "未知" : stamp(source.localModifiedMs)}</td>
@@ -630,13 +690,14 @@ export default function RepositoryPanel({
                   })}</tbody>
                 </table>
               </div>
+              <ReviewPager label="推荐清单" page={currentRecommendationPage} total={recommendations.length} onPage={setRecommendationPage} />
             </details>
           )}
           {plan.files.length > 0 && (
             <div className="repo-review-tools">
               <div className="repo-review-filters">
-                <input aria-label="搜索同步文件" placeholder="搜索文件或 Agent…" value={reviewSearch} onChange={event => setReviewSearch(event.target.value)} />
-                <select aria-label="筛选同步文件" value={reviewFilter} onChange={event => setReviewFilter(event.target.value)}>
+                <input aria-label="搜索同步文件" placeholder="搜索文件或 Agent…" value={reviewSearch} onChange={event => { setReviewSearch(event.target.value); setReviewPage(0); }} />
+                <select aria-label="筛选同步文件" value={reviewFilter} onChange={event => { setReviewFilter(event.target.value); setReviewPage(0); }}>
                   <option value="all">全部项目</option>
                   <option value="conflicts">全部冲突</option>
                   <option value="unresolved">待处理冲突</option>
@@ -654,14 +715,16 @@ export default function RepositoryPanel({
                 <button className="small" disabled={working || !checkedFiles.size} onClick={() => applyBulk("recommended")}>恢复推荐</button>
                 <button className="small" disabled={working || !checkedFiles.size} onClick={() => applyBulk("clear")}>清除处理选择</button>
               </div>
-              <p className="footnote">批量操作用于已勾选的冲突；同一技能的所有引用方一起更新。仓库版本不存在时跳过，普通合并结果保持不变。</p>
+              <p className="footnote">“勾选当前筛选冲突”覆盖所有匹配项，包含其他页；同一技能的所有引用方一起更新。仓库版本不存在时跳过，普通合并结果保持不变。</p>
               {batchNotice && <p className="repo-batch-notice" role="status">{batchNotice}</p>}
             </div>
           )}
           {plan.files.length ? (
             <div className="repo-review-grid">
+              <div className="repo-file-browser">
+                <ReviewPager label="同步文件" page={currentReviewPage} total={visibleFiles.length} onPage={next => { setReviewPage(next); setFileKey(visibleFiles[next * REVIEW_PAGE_SIZE]?.key); }} />
               <div className="repo-file-list">
-                {visibleFiles.map((file) => (
+                {pageFiles.map((file) => (
                   <div className="repo-review-file-row" key={file.key}>
                   {file.conflict && <input type="checkbox" aria-label={`勾选 ${file.agent} ${file.relative}`} checked={checkedFiles.has(file.key)} disabled={working} onChange={event => toggleChecked(file.key, event.target.checked)} />}
                   <button
@@ -693,6 +756,7 @@ export default function RepositoryPanel({
                   </div>
                 ))}
                 {!visibleFiles.length && <p className="repo-placeholder">当前筛选没有匹配项。</p>}
+              </div>
               </div>
               {currentFile && (
                 <div className="repo-file-review">

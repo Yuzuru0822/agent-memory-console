@@ -174,6 +174,7 @@ const git = require("isomorphic-git");
         ).memoryPath === selected,
       memory,
     );
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some(button => button.textContent.trim() === "预览双向同步" && !button.disabled));
     assert.equal(config().repository.memoryFolders.workbuddy, memory);
 
     const preview = page.getByRole("button", {
@@ -438,6 +439,7 @@ const git = require("isomorphic-git");
       .filter({ hasText: "asset.bin" })
       .filter({ hasText: "WorkBuddy" })
       .click();
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some(button => button.textContent.trim() === "预览双向同步" && !button.disabled));
     assert.equal(await apply().isDisabled(), false, "missing shared repository binary should have one consistent default Agent source");
     assert.equal(await page.getByRole("button", { name: "仓库版本用于所有引用方", exact: true }).isDisabled(), true, "a missing repository binary cannot be selected as the winner");
     await page
@@ -505,8 +507,14 @@ const git = require("isomorphic-git");
         ],
       }),
     );
+  } catch (error) {
+    console.error("Repository desktop regression failed before cleanup:", error);
+    throw error;
   } finally {
-    await app.close();
+    // This launch owns an isolated test profile; do not let an application quit
+    // guard hide the original assertion failure during test cleanup.
+    await app.evaluate(({ app }) => app.exit(0)).catch(() => {});
+    await app.close().catch(() => {});
   }
 })().catch((error) => {
   console.error(error);

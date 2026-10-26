@@ -7,7 +7,7 @@ import fs from "node:fs";
 import { createAdapters } from "./adapters";
 import { ConsoleService } from "./service";
 import { Processes } from "./processes";
-import { RepositoryService } from "./repository-service";
+import { RepositoryHost } from "./repository-host";
 import { assertRepositoryReportDestination, repositoryReport } from "./repository-report";
 import { RewardsService } from "./rewards-service";
 import { RewardsBalanceService } from "./rewards-balance";
@@ -39,7 +39,7 @@ const expectedUrl = dev
 let window: BrowserWindow;
 let service: ConsoleService;
 let processes: Processes;
-let repository: RepositoryService;
+let repository: RepositoryHost;
 let rewards: RewardsService;
 let balances: RewardsBalanceService;
 let tasks: TaskCenterService;
@@ -118,6 +118,7 @@ function handler(
 ) {
   ipcMain.handle(`console:${channel}`, async (event, ...args) => {
     trusted(event);
+    if (mutation) repository.assertHealthy();
     if (mutation && busy) throw new Error("另一项操作尚未完成");
     if (mutation) busy = true;
     try {
@@ -301,7 +302,8 @@ function register() {
     balances.automation(id, enabled); return {message:enabled ? "自动余额监控已开启" : "自动余额监控已关闭"};
   });
   handler("rewardBalanceReset", (value: unknown) => { balances.reset(rewardId(value)); return {message:"余额监控配置与记录已重置；未更改厂商账号或积分"}; });
-  handler("repositorySnapshot", () => repository.snapshot(), false);
+  handler("repositorySnapshot", (fresh: unknown) => repository.snapshot(fresh !== false), false);
+  handler("repositoryProgress", () => repository.progress(), false);
   handler("repositoryChoose", async () => {
     const chosen = await dialog.showOpenDialog(window, { title: "选择独立的记忆与技能 Git 仓库目录", properties: ["openDirectory", "createDirectory"] });
     const selected = chosen.filePaths[0];
@@ -315,8 +317,8 @@ function register() {
     const error = await shell.openPath(root); if (error) throw new Error(error);
     return { message: "已打开仓库目录" };
   });
-  handler("repositoryMembers", (ids: unknown) => {
-    if (!Array.isArray(ids)) throw new Error("Agent 参数无效"); repository.members(ids.map(validId));
+  handler("repositoryMembers", async (ids: unknown) => {
+    if (!Array.isArray(ids)) throw new Error("Agent 参数无效"); await repository.members(ids.map(validId));
     return { message: "纳管 Agent 已保存；变更范围后需重新启用自动同步" };
   });
   handler("repositoryMemoryFolder", async (id: unknown) => {
@@ -325,11 +327,11 @@ function register() {
     if (chosen.canceled || !chosen.filePaths[0]) return { message: "已取消记忆目录选择" };
     const selected = chosen.filePaths[0];
     if (!(await confirm("授权多文件记忆目录", `${selected}\n\n该目录中的 Markdown、文本、JSON 和 YAML 会与仓库 memories/${agent}/ 双向同步。双方同时修改时进行三方合并，冲突需要人工解决，不传播删除。请勿选择整个用户目录或含凭据的配置目录。`))) return { message: "未授权记忆目录" };
-    repository.memoryFolder(agent,selected); return { message: "记忆目录已保存；自动同步已暂停，待重新启用" };
+    await repository.memoryFolder(agent,selected); return { message: "记忆目录已保存；自动同步已暂停，待重新启用" };
   });
   handler("repositoryPreview", () => repository.preview());
   handler("repositoryExportPreview", async (id: unknown, choices: unknown) => {
-    const plan = repository.review(str(id));
+    const plan = await repository.review(str(id));
     const report = repositoryReport(plan, choices);
     const chosen = await dialog.showSaveDialog(window, { title: "导出双向同步处理清单",
       defaultPath: path.join(app.getPath("documents"), `agent-console-sync-${new Date().toISOString().slice(0, 10)}.csv`),
@@ -343,9 +345,9 @@ function register() {
     atomicWrite(destination, report);
     return {message:`已导出 ${plan.files.length} 项处理清单，包含当前选择、来源和修改时间；不含文件正文`};
   });
-  handler("repositoryCancelPreview", () => { repository.cancelPreview(); return {message:"预览已关闭，自动任务可继续运行"}; });
+  handler("repositoryCancelPreview", async () => { await repository.cancelPreview(); return {message:"预览已关闭，自动任务可继续运行"}; });
   handler("repositoryApply", async (id: unknown, choices: Record<string,RepositoryResolution>) => {
-    const plan = repository.review(str(id));
+    const plan = await repository.review(str(id));
     const paths = plan.files.slice(0,40).map(f=>`${f.agentPath}\n  ↔ ${f.repositoryPath}`).join("\n");
     if (!(await confirm("执行仓库双向合并", `${plan.files.length} 项合并结果\n${paths}${plan.files.length>40?"\n其余路径见预览列表":""}\n\n写入前保存 Git 版本和原内容快照。不会传播删除，也不会执行技能脚本。`))) return {message:"已取消仓库同步"};
     const count = await repository.apply(plan.id,choices); return {message:`仓库同步完成：${count} 个文件，已保存 Git 版本`};
@@ -356,24 +358,24 @@ function register() {
     const c = service.config.repository;
     if (!c) throw new Error("请先选择仓库");
     if ((options.enabled || options.cleanupEnabled) && !(await confirm("启用本地自动任务", `仓库：${c.root}\n纳管 Agent：${c.agentIds.join(", ")}\n自动同步：${options.enabled ? `每 ${options.intervalSeconds} 秒` : "关闭"}\n自动清理：${options.cleanupEnabled ? `保留最近 ${options.retentionDays} 天，至少 ${options.minBackups} 份备份` : "关闭"}\n\n仅在控制台打开时运行。此授权允许上述路径后续自动写入；冲突或授权改变会暂停同步，不传播删除。清理仅涉及本程序完成的过期快照，不删除 Agent 原目录、仓库内容或 Git 历史。`))) return {message:"自动任务设置未更改"};
-    repository.automation(options); return {message:"自动任务设置已保存"};
+    await repository.automation(options); return {message:"自动任务设置已保存"};
   });
   handler("repositoryCleanup", async () => {
     if (!(await confirm("清理过期仓库快照", "按当前保留天数与最少份数清理本程序完成的旧快照。未完成快照、原 Agent 目录、记忆、技能和 Git 历史均保留。"))) return {message:"已取消清理"};
-    return {message:`已清理 ${repository.cleanup()} 份过期快照`};
+    return {message:`已清理 ${await repository.cleanup()} 份过期快照`};
   });
   handler("repositoryLinkPreview", (id: unknown) => repository.linkPreview(validId(id)));
   handler("repositoryLinkApply", async (id: unknown, choices: Record<string,"agent"|"repository">) => {
-    const plan=repository.linkReview(str(id));
+    const plan=await repository.linkReview(str(id));
     if (!(await confirm("将 Agent 技能目录连接到仓库", `Agent 入口：${plan.source}\n实际仓库：${plan.target}\n原目录保留在：${plan.backupPath}\n\n将按预览结果汇入完整技能文件，保留脚本与资源但不执行，然后创建 Windows junction。所有已连接 Agent 会立即看到共享技能的修改和直接删除；同步器本身不传播删除。原目录保留，之后可解除连接恢复。${plan.warnings.length?"\n\n注意："+plan.warnings.join("\n"):""}`))) return {message:"已取消技能连接"};
     return {message:await repository.linkApply(plan.id,choices)};
   });
   handler("repositoryUnlink", async (id: unknown) => {
-    const agent=validId(id), receipt=repository.unlinkReview(agent);
+    const agent=validId(id), receipt=await repository.unlinkReview(agent);
     if (!(await confirm("解除连接并恢复原技能目录", `入口：${receipt.source}\n保留的原目录：${receipt.backupPath}\n\n只移除指向当前仓库的 junction，并还原原目录名称。仓库及其中新内容会保留；连接之后在仓库内新增的内容不会复制到原目录。`))) return {message:"已取消解除连接"};
     await repository.unlink(agent); return {message:"已恢复原技能目录，仓库内容保留"};
   });
-  handler("snapshot", () => service.snapshot(processes.snapshot()), false);
+  handler("snapshot", () => repository.consoleSnapshot(processes.snapshot()), false);
   handler("approveSkillLinks", async (id: unknown) => {
     const agent = id === null ? null : validId(id);
     const selected = agent === null ? service.config.canonicalSkills : service.paths(agent).skills;
@@ -548,7 +550,7 @@ else {
         ].filter((s): s is string => !!s),
       );
       processes = new Processes(service);
-      repository = new RepositoryService(service);
+      repository = new RepositoryHost(service);
       const rewardsBridge = new WindowsRewardsBridge(app.isPackaged
         ? path.join(process.resourcesPath, "rewards", "RewardBridge.exe")
         : path.join(app.getAppPath(), "native", "bin", "RewardBridge.exe"));
@@ -605,13 +607,13 @@ else {
       register();
       const repositoryTimer = setInterval(() => {
         updateTray();
-        if (busy || !window || window.isDestroyed() || !tasks.canRunAutomatic()) return;
+        if (busy || !repository.healthy || repository.backgroundBusy || !window || window.isDestroyed() || !tasks.canRunAutomatic()) return;
         busy = true;
         void repository.tick(Date.now(), () => tasks.canRunAutomatic()).catch(error => console.error("Repository automatic task failed:", String(error)))
           .then(() => tasks.canRunAutomatic() && Date.now() >= rewardCalibrationUntil ? rewards.tick() : undefined).catch(error => console.error("Rewards automatic task failed:", String(error)))
           .then(() => tasks.canRunAutomatic() && Date.now() >= rewardCalibrationUntil ? balances.tick() : undefined).catch(error => console.error("Balance automatic task failed:", String(error))).finally(() => { busy = false; });
       }, 5000);
-      app.once("will-quit", () => { clearInterval(repositoryTimer); taskTray.destroy(); void bridge.stop().catch(() => {}); });
+      app.once("will-quit", () => { clearInterval(repositoryTimer); taskTray.destroy(); void bridge.stop().catch(() => {}); void repository.dispose(); });
       app.on("before-quit", (event) => {
         quitting = true;
         if (busy) {

@@ -69,10 +69,32 @@ const path = require("node:path");
     await preview.click();
     await region.waitFor({ timeout: 60000 });
     await ready();
-    assert.equal(await visibleFiles.count(), 1320, "660 differing shared files produce 1320 Agent references");
+    assert.equal(await visibleFiles.count(), 100, "1320 Agent references must render at most 100 file rows per page");
+    assert.equal(await page.locator(".repo-recommendation-table tbody tr").count(), 100, "large recommendation lists must also be paged");
+    assert.match(await page.getByRole("navigation", { name: "同步文件分页" }).innerText(), /1320/);
+    await page.getByRole("combobox", { name: "同步文件跳转页", exact: true }).selectOption({ value: "13" });
+    await page.waitForFunction(() => document.querySelectorAll(".repo-file-list button").length === 20);
+    assert.equal(await visibleFiles.count(), 20, "last page must show the remainder without rendering prior pages");
+    assert.equal(await visibleFiles.locator("strong").first().innerText(), await page.locator(".repo-file-description > strong").innerText(), "changing pages selects a file from that page");
+    await page.getByRole("button", { name: "推荐清单下一页", exact: true }).click();
+    assert.equal(await page.locator(".repo-recommendation-table tbody tr").count(), 100);
+    const recommendationName = await page.locator(".repo-manifest-file").first().innerText();
+    await page.locator(".repo-manifest-file").first().click();
+    assert.equal(await page.locator(".repo-file-description > strong").innerText(), recommendationName, "manifest links must jump to the selected file's page");
     assert.equal(await apply.isDisabled(), false, "all absent-repository conflicts should be preselected without 660 manual decisions");
     assert.match(await region.innerText(), /默认采用 Agent 清单.*660/);
     assert.equal(fs.existsSync(path.join(repository, "skills", relative(0))), false, "preview must not write files");
+
+    await batch("勾选当前筛选冲突").click();
+    assert.match(await page.locator(".repo-review-filters").innerText(), /已勾选 1320 项/, "select filtered conflicts must cover all pages");
+    await batch("清除处理选择").click();
+    assert.match(await region.locator(".section-title").innerText(), /1320 个冲突待处理/);
+    await search.fill("file-0659.md");
+    assert.equal(await visibleFiles.count(), 2);
+    assert.equal(await page.locator(".repo-file-list .conflict").count(), 2, "bulk changes must reach files outside the previously rendered page");
+    await batch("恢复推荐").click();
+    assert.equal(await apply.isDisabled(), false, "restoring recommendations must cover all checked pages");
+    await batch("取消全部勾选").click();
 
     await search.fill("batch-target/");
     assert.equal(await visibleFiles.count(), 6);
@@ -105,10 +127,80 @@ const path = require("node:path");
     assert.ok(csv.includes("claude") && csv.includes("workbuddy"), "CSV includes review source identities");
     assert.equal(csv.includes("PRIVATE-FILE-CONTENT"), false, "CSV must contain metadata only, never file contents");
     await search.fill("");
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 850));
     await page.screenshot({ path: path.join(results, "repository-bulk-desktop.png"), fullPage: true });
     await region.screenshot({ path: path.join(results, "repository-bulk-preview.png") });
+    // Timers are in separate processes: renderer animation alone cannot prove the
+    // Electron main thread is responsive while filesystem and Git work proceeds.
+    await app.evaluate(() => {
+      const monitor = { last: performance.now(), maxGapMs: 0, ticks: 0 };
+      globalThis.syncMainMonitor = monitor;
+      globalThis.syncMainTimer = setInterval(() => {
+        const now = performance.now();
+        monitor.maxGapMs = Math.max(monitor.maxGapMs, now - monitor.last);
+        monitor.last = now;
+        monitor.ticks += 1;
+      }, 100);
+    });
+    await page.evaluate(() => {
+      const monitor = { last: performance.now(), maxGapMs: 0, ticks: 0, maxIpcMs: 0, polls: 0, phases: [], errors: [], running: false, pending: false };
+      window.syncRendererMonitor = monitor;
+      window.syncRendererTimer = setInterval(() => {
+        const now = performance.now();
+        monitor.maxGapMs = Math.max(monitor.maxGapMs, now - monitor.last);
+        monitor.last = now;
+        monitor.ticks += 1;
+      }, 100);
+      window.syncProgressTimer = setInterval(async () => {
+        if (monitor.pending) return;
+        monitor.pending = true;
+        const started = performance.now();
+        try {
+          const progress = await window.consoleApi.repositoryProgress();
+          monitor.maxIpcMs = Math.max(monitor.maxIpcMs, performance.now() - started);
+          monitor.polls += 1;
+          if (progress?.state === "running") monitor.running = true;
+          if (progress?.phase && !monitor.phases.includes(progress.phase)) monitor.phases.push(progress.phase);
+        } catch (error) { monitor.errors.push(String(error)); }
+        finally { monitor.pending = false; }
+      }, 300);
+    });
     await apply.click({ timeout: 300000 });
+    await page.getByRole("button", { name: "任务中心", exact: true }).click({ timeout: 5000 });
+    await page.getByRole("heading", { name: "任务中心", exact: true }).waitFor({ timeout: 5000 });
+    await page.getByLabel("仓库后台任务状态", { exact: true }).waitFor({ timeout: 5000 });
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.setSize(1230, 850);
+    });
+    await page.getByRole("button", { name: "查看统一仓库", exact: true }).click({ timeout: 5000 });
+    await page.getByRole("heading", { name: "统一记忆与技能仓库", exact: true }).waitFor({ timeout: 5000 });
+    await page.getByLabel("仓库后台任务状态", { exact: true }).screenshot({ path: path.join(results, "repository-background-progress.png") });
     await region.waitFor({ state: "detached", timeout: 300000 });
+    await page.waitForFunction(async () => (await window.consoleApi.repositoryProgress())?.state !== "running", undefined, { timeout: 300000 });
+    await ready(); // Include repository and dashboard refreshes after the write finishes.
+    const rendererMetrics = await page.evaluate(() => {
+      clearInterval(window.syncRendererTimer);
+      clearInterval(window.syncProgressTimer);
+      const { last, pending, ...metrics } = window.syncRendererMonitor;
+      return metrics;
+    });
+    const mainMetrics = await app.evaluate(() => {
+      clearInterval(globalThis.syncMainTimer);
+      const { last, ...metrics } = globalThis.syncMainMonitor;
+      return metrics;
+    });
+    console.log(JSON.stringify({ responsiveness: { main: mainMetrics, renderer: rendererMetrics } }));
+    assert.ok(mainMetrics.ticks > 0 && rendererMetrics.polls > 0, "background work must allow main timers and progress IPC polling");
+    assert.ok(mainMetrics.maxGapMs < 1500, `main event loop stalled for ${mainMetrics.maxGapMs.toFixed(0)} ms`);
+    assert.ok(rendererMetrics.maxGapMs < 1500, `renderer stalled for ${rendererMetrics.maxGapMs.toFixed(0)} ms`);
+    assert.ok(rendererMetrics.maxIpcMs < 2000, `progress IPC stalled for ${rendererMetrics.maxIpcMs.toFixed(0)} ms`);
+    assert.deepEqual(rendererMetrics.errors, []);
+    await page.waitForFunction(() => document.querySelector(".repo-notice")?.textContent?.includes("仓库同步完成"), undefined, { timeout: 5000 }).catch(async error => {
+      console.error(JSON.stringify({ completionState: await page.evaluate(async () => ({ notice: document.querySelector(".repo-notice")?.textContent, page: document.querySelector(".nav-items button.active")?.getAttribute("aria-label"), repositoryPages: document.querySelectorAll(".repository-page").length, progress: await window.consoleApi.repositoryProgress(), heading: document.querySelector(".repo-heading")?.textContent })), errors }));
+      throw error;
+    });
+    assert.ok(await page.locator(".repo-notice").isVisible(), "completion result must survive navigating away and returning");
     for (let index = 0; index < 660; index += 1) {
       const expected = content(index === 0 ? "workbuddy" : "claude", index);
       for (const directory of [claude, workbuddy, path.join(repository, "skills")]) {
@@ -147,7 +239,7 @@ const path = require("node:path");
     assert.deepEqual(errors, []);
     const dialogs = await app.evaluate(() => globalThis.bulkReviewDialogs);
     assert.ok(dialogs.every((options) => options.defaultId === 0 && options.cancelId === 0));
-    console.log(JSON.stringify({ ok: true, fixture, files: 660, references: 1320, scenarios: ["missing-repository-defaults", "newest-agent-shared-source", "search-and-filter", "bulk-clear-and-restore", "explicit-shared-source", "metadata-only-csv", "actual-660-file-sync", "older-repository-defaults", "bulk-repository-override"] }));
+    console.log(JSON.stringify({ ok: true, fixture, files: 660, references: 1320, scenarios: ["missing-repository-defaults", "newest-agent-shared-source", "paged-files-and-recommendations", "cross-page-bulk-resolution", "search-and-filter", "bulk-clear-and-restore", "explicit-shared-source", "metadata-only-csv", "background-main-and-renderer-heartbeats", "navigation-during-sync", "actual-660-file-sync", "older-repository-defaults", "bulk-repository-override"] }));
   } finally {
     // Large fixture writes can outlast a UI wait. Finish isolated writes before
     // exiting, otherwise the application's busy-operation guard blocks quit.

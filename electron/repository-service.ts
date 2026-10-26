@@ -19,6 +19,25 @@ interface State { version: 1; bases: Record<string, Base>; links: Partial<Record
 interface Pair { view: RepositoryFile; realLocal: string; local?: Buffer; repository?: Buffer; output?: Buffer; localHash: string | null; repositoryHash: string | null }
 interface Stored { view: RepositoryPlan; pairs: Pair[]; configHash: string }
 interface BackupManifest { version: 1; id: string; root: string; at: string; completed: boolean; files: { target: string; blob?: string; hash: string | null }[] }
+export interface RepositoryProgress { phase: string; completed?: number; total?: number; currentFile?: string; message?: string }
+/** Buffers belong to one preview/apply operation and are never mutated in place. */
+function memoizedHash(): (data?: Buffer) => string | null {
+  const values = new WeakMap<Buffer, string>();
+  return data => {
+    if (data === undefined) return null;
+    let value = values.get(data);
+    if (value === undefined) { value = hash(data)!; values.set(data, value); }
+    return value;
+  };
+}
+function memoizedText(): (data?: Buffer) => string | undefined {
+  const values = new WeakMap<Buffer, string | undefined>();
+  return data => {
+    if (data === undefined) return undefined;
+    if (!values.has(data)) values.set(data, plainText(data));
+    return values.get(data);
+  };
+}
 const uuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value);
 function readJson<T>(file: string): T {
   noLinks(file);
@@ -33,7 +52,15 @@ export class RepositoryService {
   private lastTick = 0;
   private cachedGit?: RepositorySnapshot["git"];
   private cachedHistory: RepositorySnapshot["history"] = [];
-  constructor(readonly console: ConsoleService) {}
+  private lastProgress?: { phase: string; at: number };
+  constructor(readonly console: ConsoleService, private readonly onProgress?: (progress: RepositoryProgress) => void) {}
+  private progress(progress: RepositoryProgress, force = false): void {
+    if (!this.onProgress) return;
+    const now = Date.now();
+    if (!force && this.lastProgress?.phase === progress.phase && now - this.lastProgress.at < 75) return;
+    this.lastProgress = { phase: progress.phase, at: now };
+    try { this.onProgress(progress); } catch { /* Observers must never interrupt a filesystem transaction. */ }
+  }
   private config(): RepositoryConfig {
     const c = this.console.config.repository;
     if (!c) throw new Error("请先选择独立的本地仓库目录");
@@ -146,12 +173,16 @@ export class RepositoryService {
       }),
     };
   }
-  private baseText(base?: Base): string | undefined {
+  private baseText(base: Base | undefined, cache: Map<string, { hash: string | null; text?: string }>, area: string): string | undefined {
     if (!base?.blob) return undefined;
     if (!/^[a-f0-9]{64}\.bin$/.test(base.blob)) throw new Error("同步基线文件名无效");
-    const data = bytes(path.join(this.area(), "bases", base.blob));
-    if (hash(data) !== base.hash) throw new Error("同步基线校验失败");
-    return plainText(data);
+    let cached = cache.get(base.blob);
+    if (!cached) {
+      const data = bytes(path.join(area, "bases", base.blob));
+      cached = { hash: hash(data), text: plainText(data) }; cache.set(base.blob, cached);
+    }
+    if (cached.hash !== base.hash) throw new Error("同步基线校验失败");
+    return cached.text;
   }
   private validateLocal(file: RepositoryFile): void {
     const c = this.config();
@@ -170,10 +201,26 @@ export class RepositoryService {
     return file.kind === "skills" ? this.console.checkRepositorySkill(file.agent, file.agentPath) : noLinks(file.agentPath);
   }
   async preview(): Promise<RepositoryPlan> {
+    this.progress({ phase: "检查仓库" }, true);
     this.guard(); const c = this.config(), state = this.state();
     await repositoryStatus(c.root);
     if (!c.agentIds.length) throw new Error("请先选择纳管 Agent 并保存选择");
     const pairs: Pair[] = [], warnings: string[] = []; let total = 0;
+    // These caches are local to this preview. Every apply still reads current
+    // files and validates every Agent's authorization and link mapping.
+    const contentHash = memoizedHash(), text = memoizedText(), snapshots = new Map<string, ReturnType<typeof fileSnapshot>>();
+    const baseCache = new Map<string, { hash: string | null; text?: string }>(), area = this.area();
+    const repositoryInventories = new Map<string, Map<string, string>>();
+    const baselineNames = new Map<string, string[]>();
+    for (const base of Object.values(state.bases)) {
+      const key = `${base.agent}:${base.kind}`, names = baselineNames.get(key) || [];
+      names.push(base.relative); baselineNames.set(key, names);
+    }
+    const snapshot = (file: string) => {
+      const key = pathKey(file);
+      if (!snapshots.has(key)) snapshots.set(key, fileSnapshot(file));
+      return snapshots.get(key);
+    };
     for (const id of c.agentIds) {
       const agent = this.console.settings(id);
       for (const kind of ["memory", "skills"] as const) {
@@ -185,29 +232,38 @@ export class RepositoryService {
         const physical=kind==="skills" ? resolveSkillPath(localRoot).real : noLinks(single||localRoot);
         const sharedSkills=kind==="skills" && samePath(physical,repoRoot);
         if (!sharedSkills && (within(c.root,physical)||within(physical,c.root))) throw new Error("Agent 路径与中央仓库实际位置重叠；请使用独立路径或技能连接功能");
+        this.progress({ phase: "扫描目录", completed: pairs.length, currentFile: localRoot, message: `${this.console.adapter(id).name} · ${kind === "skills" ? "技能" : "记忆"}` });
         const local = new Map<string, string>();
-        if (single) { if (bytes(single)) local.set(path.basename(single), single); }
+        if (single) { if (snapshot(single)) local.set(path.basename(single), single); }
         else for (const f of inventory(folder!, { links: kind === "skills", memory: kind === "memory" })) local.set(f.relative, f.logical);
-        const repository = new Map<string, string>();
-        if (fs.existsSync(repoRoot)) for (const f of inventory(repoRoot, { memory: kind === "memory" })) {
-          if (!single || f.relative === path.basename(single)) repository.set(f.relative, f.real);
+        const inventoryKey = pathKey(repoRoot);
+        let repository = repositoryInventories.get(inventoryKey);
+        if (!repository) {
+          repository = new Map<string, string>();
+          if (fs.existsSync(repoRoot)) for (const f of inventory(repoRoot, { memory: kind === "memory" })) {
+            if (!single || f.relative === path.basename(single)) repository.set(f.relative, f.real);
+          }
+          repositoryInventories.set(inventoryKey, repository);
         }
-        const names = new Set([...local.keys(), ...repository.keys(), ...Object.values(state.bases).filter(b=>b.agent === id && b.kind === kind && (!single || b.relative === path.basename(single))).map(b=>b.relative)]);
+        const names = new Set([...local.keys(), ...repository.keys(), ...(baselineNames.get(`${id}:${kind}`) || []).filter(relative=>!single || relative === path.basename(single))]);
+        let compared = 0;
+        this.progress({ phase: "比对文件", completed: 0, total: names.size, message: `${this.console.adapter(id).name} · ${kind === "skills" ? "技能" : "记忆"}` });
         for (const relative of names) {
           const key = `${id}:${kind}:${relative}`;
           const view: RepositoryFile = { key, agent: id, kind, relative, agentPath: local.get(relative) || (single || relativePath(localRoot, relative)), repositoryPath: repository.get(relative) || relativePath(repoRoot, relative), binary: false, conflict: false, description: "内容一致" };
           this.validateLocal(view);
           const realLocal = this.localReal(view);
-          const localSnapshot = fileSnapshot(realLocal), repositorySnapshot = fileSnapshot(view.repositoryPath);
+          const localSnapshot = snapshot(realLocal), repositorySnapshot = snapshot(view.repositoryPath);
           const localData = localSnapshot?.data, repoData = repositorySnapshot?.data;
+          this.progress({ phase: "比对文件", completed: ++compared, total: names.size, currentFile: relative }, compared === names.size);
           view.localExists = localData !== undefined; view.repositoryExists = repoData !== undefined;
           view.localModifiedMs = localSnapshot?.modifiedMs; view.repositoryModifiedMs = repositorySnapshot?.modifiedMs;
           if (!localData && !repoData) continue;
           total += (localData?.length || 0) + (repoData?.length || 0);
           if (pairs.length >= COUNT_LIMIT || total > TOTAL_LIMIT * 2) throw new Error("同步批次超过 5000 文件或 256 MiB，请减少纳管目录");
-          const lh = hash(localData), rh = hash(repoData), base = state.bases[key];
+          const lh = contentHash(localData), rh = contentHash(repoData), base = state.bases[key];
           let output: Buffer | undefined;
-          view.localText = plainText(localData); view.repositoryText = plainText(repoData); view.baseText = this.baseText(base);
+          view.localText = text(localData); view.repositoryText = text(repoData); view.baseText = this.baseText(base, baseCache, area);
           view.binary = !!localData && view.localText === undefined || !!repoData && view.repositoryText === undefined;
           if (lh === rh) output = localData;
           else if (!localData) { output = repoData; view.description = "仓库 → Agent（保留内容，不传播删除）"; }
@@ -220,24 +276,27 @@ export class RepositoryService {
             if (!merged.conflict && merged.text !== undefined) { output = Buffer.from(merged.text); view.description = "三方合并：双方独立修改"; }
           } else view.conflict = true;
           if (view.conflict) view.description = "双方内容冲突，请选择保留版本或手动合并";
-          if (output) view.mergedText = plainText(output);
+          if (output) view.mergedText = text(output);
           pairs.push({ view, realLocal, local: localData, repository: repoData, localHash: lh, repositoryHash: rh, output });
         }
       }
     }
+    this.progress({ phase: "汇总共享技能", completed: 0, total: pairs.length });
     const groups = new Map<string, Pair[]>();
-    for (const pair of pairs.filter(p=>p.view.kind === "skills")) {
-      const key = pathKey(pair.view.repositoryPath); groups.set(key, [...(groups.get(key) || []), pair]);
+    for (const pair of pairs) {
+      if (pair.view.kind !== "skills") continue;
+      const key = pathKey(pair.view.repositoryPath), group = groups.get(key) || [];
+      group.push(pair); groups.set(key, group);
     }
     for (const group of groups.values()) {
       if (group.length<2) continue;
       let conflict=group.some(p=>p.view.conflict), merged=group[0].repository;
-      const updates=[...new Map(group.filter(p=>p.output!==undefined && hash(p.output)!==p.repositoryHash).map(p=>[hash(p.output),p.output!])).values()];
+      const updates=[...new Map(group.filter(p=>p.output!==undefined && contentHash(p.output)!==p.repositoryHash).map(p=>[contentHash(p.output),p.output!])).values()];
       for (const update of updates) {
         if (conflict) break;
-        if (merged===undefined || hash(merged)===group[0].repositoryHash) merged=update;
+        if (merged===undefined || contentHash(merged)===group[0].repositoryHash) merged=update;
         else {
-          const base=plainText(group[0].repository), current=plainText(merged), next=plainText(update);
+          const base=text(group[0].repository), current=text(merged), next=text(update);
           if (current===undefined || next===undefined) { conflict=true; break; }
           const result=mergeText(base,current,next);
           if (result.conflict || result.text===undefined) { conflict=true; break; }
@@ -245,7 +304,10 @@ export class RepositoryService {
         }
       }
       if (conflict) group.forEach(p=>{ p.view.conflict=true; p.view.description="多个 Agent 对同一技能给出不同版本，请统一选择结果"; p.output=undefined; });
-      else if (merged!==undefined) group.forEach(p=>{ p.output=merged; p.view.mergedText=plainText(merged); if(hash(merged)!==p.localHash||hash(merged)!==p.repositoryHash) p.view.description="汇总共享技能修改，同步到所有选定 Agent"; });
+      else if (merged!==undefined) {
+        const mergedHash = contentHash(merged), mergedText = text(merged);
+        group.forEach(p=>{ p.output=merged; p.view.mergedText=mergedText; if(mergedHash!==p.localHash||mergedHash!==p.repositoryHash) p.view.description="汇总共享技能修改，同步到所有选定 Agent"; });
+      }
     }
     // These suggestions only initialize the manual preview. They never resolve a
     // conflict in the service or allow a scheduled run to overwrite a version.
@@ -275,8 +337,10 @@ export class RepositoryService {
         previewBudget-=Math.min(value.length,limit);
       }
     }
-    const view: RepositoryPlan = { id: crypto.randomUUID(), expiresAt: new Date(Date.now() + 300000).toISOString(), files: pairs.filter(p=>p.view.conflict || hash(p.output) !== p.localHash || hash(p.output) !== p.repositoryHash).map(p=>p.view), warnings };
-    this.plans.clear(); this.plans.set(view.id, { view, pairs, configHash: this.scopeHash() }); return view;
+    const view: RepositoryPlan = { id: crypto.randomUUID(), expiresAt: new Date(Date.now() + 300000).toISOString(), files: pairs.filter(p=>p.view.conflict || contentHash(p.output) !== p.localHash || contentHash(p.output) !== p.repositoryHash).map(p=>p.view), warnings };
+    this.plans.clear(); this.plans.set(view.id, { view, pairs, configHash: this.scopeHash() });
+    this.progress({ phase: "预览完成", completed: pairs.length, total: pairs.length, message: `${view.files.length} 项变更` }, true);
+    return view;
   }
   review(id: string): RepositoryPlan {
     const p = this.plans.get(id);
@@ -285,8 +349,9 @@ export class RepositoryService {
   }
   private preflight(pair: Pair): void {
     this.validateLocal(pair.view);
-    if (!samePath(this.localReal(pair.view),pair.realLocal)) throw new Error(`预览后实际路径或链接发生变化：${pair.view.relative}`);
-    const local = fileSnapshot(this.localReal(pair.view)), repository = fileSnapshot(pair.view.repositoryPath);
+    const realLocal = this.localReal(pair.view);
+    if (!samePath(realLocal,pair.realLocal)) throw new Error(`预览后实际路径或链接发生变化：${pair.view.relative}`);
+    const local = fileSnapshot(realLocal), repository = fileSnapshot(pair.view.repositoryPath);
     if (hash(local?.data) !== pair.localHash || hash(repository?.data) !== pair.repositoryHash) throw new Error(`预览后文件或链接发生变化：${pair.view.relative}`);
     if (pair.view.recommendation && (local?.modifiedMs !== pair.view.localModifiedMs || repository?.modifiedMs !== pair.view.repositoryModifiedMs)) throw new Error(`预览后文件修改时间发生变化，请重新预览：${pair.view.relative}`);
   }
@@ -294,19 +359,25 @@ export class RepositoryService {
     const id = crypto.randomUUID(), folder = path.join(this.area(), "backups", id);
     noLinks(folder); fs.mkdirSync(folder, { recursive: true });
     const manifest: BackupManifest = { version: 1, id, root: this.config().root, at: new Date().toISOString(), completed: false, files: [] };
+    this.progress({ phase: "备份原文件", completed: 0, total: writes.length });
     writes.forEach((w,i)=>{
       const blob = w.before === undefined ? undefined : `${i}.bin`;
       if (blob) atomicWrite(path.join(folder, blob), w.before!);
       manifest.files.push({ target: w.target, blob, hash: hash(w.before) });
+      this.progress({ phase: "备份原文件", completed: i + 1, total: writes.length, currentFile: path.basename(w.target) }, i + 1 === writes.length);
     });
     atomicWrite(path.join(folder, "manifest.json"), JSON.stringify(manifest, null, 2));
     return { folder, manifest };
   }
   async apply(id: string, choices: Record<string, RepositoryResolution> = {}): Promise<number> {
+    this.progress({ phase: "执行前校验" }, true);
     this.guard(); this.review(id);
     const plan = this.plans.get(id)!; this.plans.delete(id);
     if (!choices || typeof choices !== "object" || Array.isArray(choices)) throw new Error("合并选择无效");
     const writes = new Map<string, { target: string; before?: Buffer; after: Buffer }>();
+    const contentHash = memoizedHash(), text = memoizedText(), pairsByKey = new Map(plan.pairs.map(pair=>[pair.view.key, pair]));
+    const targetPairs = new Map<string, Pair[]>();
+    let checked = 0;
     for (const pair of plan.pairs) {
       const choice = choices[pair.view.key];
       if (pair.view.conflict) {
@@ -315,7 +386,7 @@ export class RepositoryService {
           if (pair.view.binary || pair.view.previewTruncated || typeof choice.text !== "string" || Buffer.byteLength(choice.text) > 1024 * 1024 || choice.text.includes("\0")) throw new Error("手动合并仅支持完整预览的文本");
           pair.output = Buffer.from(choice.text);
         } else if (choice.choice === "agent" && choice.sourceKey) {
-          const source=plan.pairs.find(p=>p.view.key===choice.sourceKey);
+          const source=pairsByKey.get(choice.sourceKey);
           if (!source || source !== pair && (source.view.kind!=="skills" || pair.view.kind!=="skills" || !samePath(source.view.repositoryPath,pair.view.repositoryPath))) throw new Error("共享技能版本来源无效");
           pair.output=source.local;
         } else pair.output = choice.choice === "agent" ? pair.local : pair.repository;
@@ -324,46 +395,68 @@ export class RepositoryService {
       this.preflight(pair);
       for (const [target,before] of [[pair.realLocal,pair.local], [pair.view.repositoryPath,pair.repository]] as const) {
         const key = pathKey(target), previous = writes.get(key);
-        if (previous && hash(previous.after) !== hash(pair.output)) throw new Error("不同 Agent 的选择仍会覆盖同一个实际文件，请统一冲突结果");
+        if (previous && contentHash(previous.after) !== contentHash(pair.output)) throw new Error("不同 Agent 的选择仍会覆盖同一个实际文件，请统一冲突结果");
         writes.set(key, { target, before, after: pair.output });
+        const related = targetPairs.get(key) || [];
+        // A junction can make the Agent and repository path the same target.
+        if (related[related.length - 1] !== pair) related.push(pair);
+        targetPairs.set(key, related);
       }
+      this.progress({ phase: "执行前校验", completed: ++checked, total: plan.pairs.length, currentFile: pair.view.relative }, checked === plan.pairs.length);
     }
-    const changed = [...writes.values()].filter(w=>hash(w.before) !== hash(w.after));
+    const changed = [...writes.values()].filter(w=>contentHash(w.before) !== contentHash(w.after));
     const c = this.config(), state = this.state();
     this.running = true;
     let backup: ReturnType<RepositoryService["createBackup"]> | undefined;
     const written: typeof changed = [];
     try {
+      this.progress({ phase: "保存同步前 Git 记录", message: "正在保存仓库已有修改" });
       const checkpoint=await commitRepository(c.root, "同步前保存仓库已有修改");
       if (plan.configHash!==this.scopeHash()) throw new Error("授权范围在 Git 检查期间变化，请重新预览");
-      plan.pairs.forEach(p=>this.preflight(p));
+      this.progress({ phase: "再次校验文件", completed: 0, total: plan.pairs.length });
+      plan.pairs.forEach((p,i)=>{
+        this.preflight(p);
+        this.progress({ phase: "再次校验文件", completed: i + 1, total: plan.pairs.length, currentFile: p.view.relative }, i + 1 === plan.pairs.length);
+      });
       if (changed.length) backup = this.createBackup(changed);
+      this.progress({ phase: "写入文件", completed: 0, total: changed.length });
       for (const write of changed) {
         if (plan.configHash!==this.scopeHash()) throw new Error("授权范围已变化");
-        plan.pairs.filter(p=>samePath(p.view.repositoryPath,write.target) || samePath(p.realLocal,write.target)).forEach(p=>{
+        targetPairs.get(pathKey(write.target))!.forEach(p=>{
           // Recheck authorization and link mapping; own earlier writes may have changed content.
           this.validateLocal(p.view);
           if (!samePath(this.localReal(p.view),p.realLocal)) throw new Error("执行期间链接实际位置变化");
         });
-        if (hash(bytes(write.target)) !== hash(write.before)) throw new Error("执行期间目标被外部修改");
+        if (contentHash(bytes(write.target)) !== contentHash(write.before)) throw new Error("执行期间目标被外部修改");
         atomicWrite(write.target, write.after); written.push(write);
-        if (hash(bytes(write.target)) !== hash(write.after)) throw new Error("写入校验失败");
+        if (contentHash(bytes(write.target)) !== contentHash(write.after)) throw new Error("写入校验失败");
+        this.progress({ phase: "写入文件", completed: written.length, total: changed.length, currentFile: path.basename(write.target) }, written.length === changed.length);
       }
+      this.progress({ phase: "保存同步后 Git 记录", message: "正在提交本次同步变更" });
       const committed=await commitRepository(c.root, `双向同步 ${changed.length} 个文件`);
       if (plan.configHash!==this.scopeHash()) throw new Error("授权范围在 Git 提交期间变化");
+      this.progress({ phase: "保存同步基线", completed: 0, total: plan.pairs.length });
+      const savedBlobs = new Set<string>(), baseFolder = path.join(this.area(), "bases");
+      let saved = 0;
       for (const p of plan.pairs) {
-        const h = hash(p.output)!;
-        const blob = plainText(p.output) === undefined ? undefined : `${h}.bin`;
-        if (blob && (state.bases[p.view.key]?.hash!==h || state.bases[p.view.key]?.blob!==blob)) atomicWrite(path.join(this.area(), "bases", blob), p.output!);
+        const h = contentHash(p.output)!;
+        const blob = text(p.output) === undefined ? undefined : `${h}.bin`;
+        if (blob && !savedBlobs.has(blob) && (state.bases[p.view.key]?.hash!==h || state.bases[p.view.key]?.blob!==blob)) {
+          atomicWrite(path.join(baseFolder, blob), p.output!); savedBlobs.add(blob);
+        }
         state.bases[p.view.key] = { hash: h, blob, agent: p.view.agent, kind: p.view.kind, relative: p.view.relative };
+        this.progress({ phase: "保存同步基线", completed: ++saved, total: plan.pairs.length, currentFile: p.view.relative }, saved === plan.pairs.length);
       }
       state.lastRun = new Date().toISOString(); state.lastMessage = `双向同步完成：${changed.length} 个文件；不传播删除`; delete state.lastIssue;
       this.saveState(state);
       if (backup) { backup.manifest.completed = true; atomicWrite(path.join(backup.folder,"manifest.json"),JSON.stringify(backup.manifest,null,2)); }
       if (changed.length || checkpoint.changed || committed.changed) this.audit("sync", `${changed.length} 个文件 · ${c.root}`);
+      this.progress({ phase: "同步完成", completed: changed.length, total: changed.length, message: state.lastMessage }, true);
       return changed.length;
     } catch (error) {
       let recovered = 0;
+      this.progress({ phase: "回滚文件", completed: 0, total: written.length });
+      let attempted = 0;
       for (const write of written.reverse()) {
         try {
           noLinks(write.target);
@@ -371,8 +464,10 @@ export class RepositoryService {
           if (write.before === undefined) fs.unlinkSync(write.target); else atomicWrite(write.target,write.before);
           recovered++;
         } catch { /* Keep incomplete backups for manual recovery. */ }
+        finally { this.progress({ phase: "回滚文件", completed: ++attempted, total: written.length, currentFile: path.basename(write.target) }, attempted === written.length); }
       }
       this.audit("sync-failed", `已回退 ${recovered}/${written.length} 项；快照 ${backup?.folder || "未写入"}；${String(error)}`);
+      this.progress({ phase: "同步失败", completed: recovered, total: written.length, message: `已回退 ${recovered}/${written.length} 项，写前快照已保留` }, true);
       throw new Error(`${String(error)}；已回退 ${recovered}/${written.length} 项，写前快照已保留`);
     } finally { this.running = false; }
   }

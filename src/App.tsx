@@ -44,7 +44,8 @@ import {
   X,
 } from "lucide-react";
 import type { AgentId, AgentView, PathKind, Plan, Snapshot, SkillsInfo } from "./shared";
-import RepositoryPanel from "./RepositoryPanel";
+import RepositoryPanel, { RepositoryProgressStatus } from "./RepositoryPanel";
+import type { RepositoryProgress } from "./repository-types";
 import RewardsPanel from "./RewardsPanel";
 import TaskCenterPanel from "./TaskCenterPanel";
 import InteropPanel from "./InteropPanel";
@@ -138,7 +139,32 @@ export default function App() {
   const [auto, setAuto] = useState(true);
   const [taskControls, setTaskControls] = useState<TaskControlsSnapshot>();
   const [taskControlsError, setTaskControlsError] = useState<string>();
+  const [repositoryProgress, setRepositoryProgress] = useState<RepositoryProgress>();
+  const [dismissedRepositoryProgress, setDismissedRepositoryProgress] = useState<string>();
+  const [repositoryOpened, setRepositoryOpened] = useState(false);
   const refreshing = useRef(false);
+  useEffect(() => {
+    if (tab === "repository") setRepositoryOpened(true);
+  }, [tab]);
+  useEffect(() => {
+    if (!api) return;
+    let active = true;
+    let pending = false;
+    async function pollRepositoryProgress() {
+      if (pending) return;
+      pending = true;
+      try {
+        const next = await api!.repositoryProgress();
+        if (active) setRepositoryProgress(current =>
+          current?.id === next?.id && current?.updatedAt === next?.updatedAt && current?.state === next?.state ? current : next);
+      } catch {
+        // Existing operation and errors stay visible if a lightweight poll is interrupted.
+      } finally { pending = false; }
+    }
+    void pollRepositoryProgress();
+    const timer = window.setInterval(() => void pollRepositoryProgress(), 800);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   useEffect(() => {
     if (!api) return;
     let active = true;
@@ -535,6 +561,11 @@ export default function App() {
             </button>
           </div>
         </header>
+        {repositoryProgress && repositoryProgress.id !== dismissedRepositoryProgress && <RepositoryProgressStatus
+          progress={repositoryProgress}
+          onOpen={() => setTab("repository")}
+          onDismiss={() => setDismissedRepositoryProgress(repositoryProgress.id)}
+        />}
         {(taskControls?.controls.paused || taskControls?.controls.error || taskControlsError) && <aside className={`tasks-global-pause ${taskControls?.controls.error || taskControlsError ? "is-error" : ""}`} aria-label="自动任务全局状态" role="status">
           <Pause size={20} /><div>
             <strong>{taskControls?.controls.paused ? "自动任务已统一暂停" : "自动任务状态需要检查"}</strong>
@@ -853,7 +884,9 @@ export default function App() {
                 <Backups compact />
               </>
             )}
-            {tab === "repository" && <RepositoryPanel onChange={refresh} />}
+            {(repositoryOpened || tab === "repository") && <div hidden={tab !== "repository"}>
+              <RepositoryPanel onChange={refresh} progress={repositoryProgress} />
+            </div>}
             {tab === "rewards" && <RewardsPanel />}
             {tab === "interop" && <InteropPanel onRepository={() => setTab("repository")} />}
             {tab === "tasks" && <TaskCenterPanel onNavigate={setTab} onControls={snapshot => { setTaskControls(snapshot); setTaskControlsError(undefined); }} />}
@@ -1104,7 +1137,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.6.1</b>
+                AGENT MEMORY CONSOLE <b>v0.7.0</b>
               </span>
             </footer>
           </>
@@ -1477,3 +1510,4 @@ export default function App() {
     </div>
   );
 }
+

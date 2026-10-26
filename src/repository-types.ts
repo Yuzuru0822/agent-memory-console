@@ -7,6 +7,18 @@ export interface RepositoryAutomation {
   retentionDays: number;
   minBackups: number;
 }
+export interface RepositoryProgress {
+  id: string;
+  operation: string;
+  phase: string;
+  completed?: number;
+  total?: number;
+  currentFile?: string;
+  message?: string;
+  state: "running" | "completed" | "failed";
+  startedAt: string;
+  updatedAt: string;
+}
 export interface RepositoryConfig {
   root: string;
   agentIds: AgentId[];
@@ -65,7 +77,8 @@ export interface JunctionView {
   alreadyLinked: boolean;
 }
 export interface RepositoryApi {
-  repositorySnapshot(): Promise<RepositorySnapshot>;
+  repositoryProgress(): Promise<RepositoryProgress | undefined>;
+  repositorySnapshot(fresh?: boolean): Promise<RepositorySnapshot>;
   repositoryChoose(): Promise<Result>;
   repositoryReveal(): Promise<Result>;
   repositoryMembers(ids: AgentId[]): Promise<Result>;

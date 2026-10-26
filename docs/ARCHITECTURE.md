@@ -1,6 +1,6 @@
 # 架构与扩展
 
-工程将界面、受限桌面接口和本地服务分开。React 只展示数据及发起固定操作；文件访问、授权检查、备份、子进程、积分领取及余额监控均位于 Electron 主进程。v0.3.0 引入 Windows UI Automation，v0.4.0 扩展领取后自动执行与独立余额监控，v0.5.0 增加统一任务视图、调度总开关、托盘与固定 CSV 报表；原生桥接仍只接收固定 JSON 请求。
+工程将界面、受限桌面接口和本地服务分开。React 只展示数据及发起固定操作；Electron 主进程负责窗口、授权入口、子进程、积分领取与余额监控，统一仓库服务及总览文件检查在专用 Worker 中执行。v0.3.0 引入 Windows UI Automation，v0.4.0 扩展领取后自动执行与独立余额监控，v0.5.0 增加统一任务视图、调度总开关、托盘与固定 CSV 报表；v0.7.0 增加后台仓库线程、阶段进度、分页和批量 Git 暂存。原生桥接仍只接收固定 JSON 请求。
 
 ## 文件职责
 
@@ -25,6 +25,8 @@
 | `electron/repository-git.ts` | 通过 isomorphic-git 初始化中央仓库、状态、提交和历史；只记录工作文件，排除技能内层 Git 元数据；不启动 Git 子进程 |
 | `electron/repository-files.ts` | 仓库文件枚举、容量限制、二进制读取、路径约束和文本识别 |
 | `electron/repository-service.ts` | 仓库与成员授权、双向计划/备份/共同版本、自动同步、保留清理及链接恢复回执 |
+| `electron/repository-host.ts` | 主进程的 Worker 生命周期、串行请求队列、状态缓存、阶段进度与异常停止 |
+| `electron/repository-worker.ts` / `electron/repository-worker-types.ts` | 固定后台方法契约、仓库服务执行、配置回传、主线程审计确认和自动任务继续检查 |
 | `electron/merge.ts` | 基于共同版本的逐行三方合并；保留换行形式，冲突不写入冲突标记 |
 | `electron/junction-migration.ts` | 完整技能包及独立内层 Git 目录导入、冲突预检、原入口备份、junction 创建、失败回滚及解除连接 |
 | `electron/git-migration.ts` | 只读检查内层 Git 是否可独立搬迁；拒绝外置元数据、对象依赖及路径配置，不加载 include 或执行 hooks |
@@ -39,7 +41,21 @@
 | `tests/rewards-desktop.cjs` | 在隔离 Electron 应用中使用模拟桥接测试 React、IPC 和积分流程 |
 | `tests/rewards-balance-desktop.cjs` | 在隔离 Electron 应用中验证余额配置、监控状态和领取联动，使用模拟数据 |
 
-界面没有本地权限时会显示桌面启动提示。主进程只接受来自预期窗口主 frame 和预期页面 URL 的 IPC。会改变状态的 IPC 操作串行处理；刷新快照可以并行读取。
+界面没有本地权限时会显示桌面启动提示。主进程只接受来自预期窗口主 frame 和预期页面 URL 的 IPC。会改变状态的 IPC 操作串行处理；快照请求不会取得全局写操作锁，仓库 Worker 内部仍按队列执行，忙碌期间优先返回已有快照。
+
+## 仓库后台执行（v0.7.0）
+
+调用链为 React → 固定 preload API → 主进程 IPC 与原生确认 → `RepositoryHost` → 持久 `worker_threads.Worker` → `RepositoryService`。Worker 持有预览计划、文件缓冲和 Git 操作；主进程不通过同步等待阻塞 Electron 事件循环。初始化、预览、应用、提交、清理及 junction 操作均经固定方法派发，总览的目录检查也由 Worker 执行。它仍使用当前用户权限，不构成文件系统沙箱。
+
+主进程保留全局修改锁，防止路径授权、配置和其他本地写入与仓库任务交叉。每项后台请求在实际派发时取得配置副本，Worker 保存配置后回传主进程。活动台账只有主进程写入；Worker 通过共享内存确认等待审计结果，写入失败会抛回服务，沿用原有失败处理。线程退出后拒绝后续修改并要求重启，防止用过期的主线程配置覆盖已落盘内容，不自动重启线程或重发不确定的写入。
+
+后台进度记录操作、阶段、当前文件、可取得的计数与时间，经轻量 IPC 返回。阶段计数是当前阶段的进度，不是整个事务的百分比；Git 等无准确计数的阶段只显示阶段与用时。仓库快照最多缓存 15 秒并核对配置；执行过程中可返回已有快照。任务中心读取调度元数据，查看任务无需重新扫描技能。定时器避开正在执行的后台读取，未启用、未到期或被预览暂停的 tick 不再排队占用全局锁。
+
+同步文件列表与推荐清单每页渲染 100 项。搜索、筛选、批量选择和报告仍基于完整计划；共享技能分组索引供选择逻辑复用，跨页选择不会丢失。仓库页首次打开后保留挂载，切换页面保留计划和当前选择；到期、显式关闭预览及授权变化仍按原规则处理。
+
+性能优化限制在一次操作内：相同实际文件的读取、哈希和共同版本可复用；写入前与实际写入时仍重新检查授权、链接和磁盘内容。写入目标使用路径索引定位相关 Agent，避免每写一个文件重新遍历整份计划。Git `add` 按最多 256 个文件及累计 16 MiB 分批，超过 16 MiB 的合法单文件独立成批；`remove` 使用一次数组调用，减少整份 index 的重复写入。完整路径、内层 `.git`、跟踪范围和容量检查继续执行，不保留跨操作的文件授权或 Git 索引缓存。
+
+用户可在后台执行期间切换页面；新的修改操作仍需等当前操作完成后再执行。暂停只阻止后续自动阶段，Worker 在实际开始自动任务及后续清理前向主进程查询当前暂停状态。已经开始的同步继续收尾，正常退出会等待在途写入完成，不通过终止 Worker 来取消同步。文件扫描、校验、备份和 Git 仍有实际磁盘耗时。
 
 ## 状态与发现
 
@@ -175,6 +191,6 @@ v0.6.0 的 `McpShareService` 管理共享 `mcp/servers.json`、私有变量与�
 
 开发和生产构建都运行 `build:rewards`，使用系统 `%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` 及其 .NET Framework/WPF 引用；不下载编译器或执行 UIA。缺少系统组件时 Windows 构建失败，非 Windows 构建明确跳过桥接。完整要求见 [运行说明](../README.md)。
 
-`npm run pack` 与 `npm run dist` 使用 electron-builder 输出 Windows x64 解包目录及 v0.6.0 便携 EXE；构建直接使用 `node_modules/electron/dist` 的已安装运行时，并将原生桥接复制到 `resources/rewards/`。解包成品使用 `node tests/packaged.cjs`，便携单文件使用 `node tests/portable.cjs` 验证启动。依赖由 `package-lock.json` 锁定，使用 `npm ci` 安装，Electron 当前固定为 `45.0.0`。写入测试使用隔离数据；覆盖、成品只读发现范围与结果见 [测试说明](TESTING.md)。真实账号的领取、到账与余额读取仍未验证。
+`npm run pack` 与 `npm run dist` 使用 electron-builder 输出 Windows x64 解包目录及 v0.7.0 便携 EXE；构建直接使用 `node_modules/electron/dist` 的已安装运行时，并将原生桥接复制到 `resources/rewards/`。编译后的 `repository-worker.js` 随 `dist-electron/` 打包，必须保留完整资源目录。解包成品使用 `node tests/packaged.cjs`，便携单文件使用 `node tests/portable.cjs` 验证启动。依赖由 `package-lock.json` 锁定，使用 `npm ci` 安装，Electron 当前固定为 `45.0.0`。写入测试使用隔离数据；覆盖、成品只读发现范围与结果见 [测试说明](TESTING.md)。真实账号的领取、到账与余额读取仍未验证。
 
 开发模式提供 `CONSOLE_TEST_DATA` 和 `CONSOLE_TEST_HOME` 环境变量供测试隔离数据与用户目录；打包应用不接受这两项覆盖。请勿把测试变量配置在日常启动环境中。

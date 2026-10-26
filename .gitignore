@@ -6,4 +6,6 @@ dist-electron/
 release/
 release-*/
 test-results/
+work/
+deliverables/
 *.log

@@ -12,6 +12,10 @@ const MAX_FILE = 32 * 1024 * 1024;
 const MAX_GIT_FILE = 128 * 1024 * 1024;
 const MAX_TOTAL = 512 * 1024 * 1024;
 const MAX_IO = 500_000;
+// A git.add call rewrites the entire index. Bound both concurrent file reads and
+// buffered content while amortizing that write across many skill files.
+const STAGE_BATCH_FILES = 256;
+const STAGE_BATCH_BYTES = 16 * 1024 * 1024;
 const pending = new Map<string, Promise<unknown>>();
 
 function locked<T>(root: string, run: () => Promise<T>): Promise<T> {
@@ -205,6 +209,34 @@ async function validateTracked(client: ReturnType<typeof confinedFs>, root: stri
   });
 }
 
+async function stageChanges(client: ReturnType<typeof confinedFs>, root: string, rows: Awaited<ReturnType<typeof git.statusMatrix>>): Promise<void> {
+  const removed: string[] = [], added: string[] = [];
+  for (const [filepath, , work] of rows) {
+    if (!allowedFile(filepath)) throw new Error(`Git 含有管理范围外的文件：${filepath}`);
+    (work === 0 ? removed : added).push(filepath);
+  }
+  // remove also supports an array and writes its index just once. Remove first
+  // so file/directory replacements cannot leave obsolete index entries behind.
+  if (removed.length) await git.remove({ fs: client, dir: root, filepath: removed });
+  let batch: string[] = [], size = 0;
+  const flush = async () => {
+    if (!batch.length) return;
+    await git.add({ fs: client, dir: root, filepath: batch, force: true });
+    batch = [];
+    size = 0;
+  };
+  for (const filepath of added) {
+    // Do not retain path or content caches across operations: links and external
+    // edits still receive the same confined filesystem checks at every access.
+    const stat = await client.promises.lstat(path.join(root, filepath));
+    if (!stat.isFile() || stat.size > MAX_FILE) throw new Error("仓库文件过大或不是普通文件");
+    if (batch.length && (batch.length >= STAGE_BATCH_FILES || size + stat.size > STAGE_BATCH_BYTES)) await flush();
+    batch.push(filepath);
+    size += stat.size;
+  }
+  await flush();
+}
+
 export async function initRepository(input: string): Promise<void> {
   const root = noLinks(localPath(input));
   return locked(root, async () => {
@@ -250,10 +282,7 @@ export async function commitRepository(input: string, message: string): Promise<
       filter: statusFilter });
     const changed = rows.filter(([, h, w, s]) => h !== w || h !== s);
     if (!changed.length && head) return { oid: head, changed: false };
-    for (const [filepath, , work] of changed) {
-      if (work === 0) await git.remove({ fs: client, dir: root, filepath });
-      else await git.add({ fs: client, dir: root, filepath, force: true });
-    }
+    await stageChanges(client, root, changed);
     const oid = await git.commit({ fs: client, dir: root, message: message.trim(), author: { name: "Agent Memory Console", email: "local@agent-memory-console.invalid" } });
     return { oid, changed: true };
   });

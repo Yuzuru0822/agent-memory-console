@@ -2,7 +2,41 @@
 
 本地服务测试、真实 Electron 窗口测试和厂商集成验证分别记录。测试中的记忆、技能、脚本和 PE 字节均为人工夹具，不来自真实 Agent，也不执行技能脚本。
 
-## v0.6.1 本轮验证（2026-10-26）
+## v0.7.0 本轮验证（2026-10-26）
+
+本轮将统一仓库操作及总览文件扫描移至持久后台 Worker，增加阶段进度和分页，减少共享技能的重复扫描、基线读写及 Git 索引写入。所有写入验证均使用隔离人工夹具，未同步用户实际技能和记忆，也未关闭其运行中的旧版应用。
+
+| 检查 | 结果 | 范围 |
+| --- | --- | --- |
+| `npm run build` | 通过 | Renderer/Main/Worker TypeScript、原生组件、Vite |
+| `npm test` | 396 通过、2 跳过、0 失败（共 398 项） | 两项文件符号链接权限跳过保留，目录 junction 测试通过 |
+| `repository-git-performance.test.ts` | 2 项通过 | 500 文件批量添加、修改/删除/新增混合、16 MiB 批次、索引写入次数与 Git 历史内容 |
+| `repository-performance.test.ts` | 5 项通过 | 单次预览复用共享文件与基线读取、重复基线写入去重、75ms 阶段进度节流、观察者故障不影响同步、失败备份及回滚 |
+| `repository-host.test.ts` | 11 项通过 | 真实 Worker 的计划保留、授权变化、主线程心跳、单一审计写入及失败回滚、排队后暂停、自动冲突、崩溃不重试及旧配置写入门禁、空闲 tick、定时缓存与手动实时刷新 |
+| `node tests/repository-bulk-desktop.cjs` | 通过 | 660 个共享文件、1320 个引用实际同步；跨页批选、默认推荐、CSV、切页与调整窗口、返回后预览和完成提示保留 |
+| `node tests/repository-desktop.cjs` | 通过 | 14 项原有仓库/合并/冲突/备份/junction/自动化/窄窗口流程回归 |
+| 成品与构建一致性 | 通过 | ASAR 中 40 个编译文件与构建逐字节一致；原生组件哈希一致、无效协议在 UIA 前拒绝；便携 EXE 状态 NotSigned |
+| `packaged.cjs` / `portable.cjs` | 通过 | v0.7.0 解包和便携成品实际启动、Worker 总览扫描、沙箱与隔离配置、全部导航 |
+| `repository-packaged.cjs` | 通过 | ASAR 内 Worker 初始化仓库及保存 Git、外部文件实时 dirty 状态、二进制/脚本提交、重启历史、内层 Git 保留，未授权 Agent |
+
+660 文件桌面同步期间采用 100ms 心跳：主进程最长间隔约 **115ms**，Renderer 约 **156ms**；每 300ms 发起的进度 IPC 最长约 **18ms**。采到执行前校验、再次校验、备份、写入、Git、基线及完成阶段。页面列表和推荐清单每页最多 100 行，筛选与批选仍覆盖所有页。阶段进度截图与 1000px 窄窗口预览截图已查看，文字与控件无重叠。这些是本机夹具测试结果，磁盘、杀毒软件、文件体积与机器负载会影响实际耗时；后台执行不表示无需等待文件与 Git 写入。
+
+单独 Git 对比夹具（同一实现前后、同一磁盘）：500 个小文件的索引写入 **500 → 2**，约 **11.90s → 4.93s**；1000 个文件 **1000 → 4**，约 **17.39s → 8.85s**。稳定断言采用索引次数与内容一致性，不把墙钟耗时作为性能承诺。共享文件夹具验证 40 文件、两个 Agent 的中央技能树只扫描一次，每个中央文件读取一次；80 个相同基线只读/写一份内容对象。
+
+```powershell
+npm run build
+npm test
+node tests/repository-desktop.cjs
+node tests/repository-bulk-desktop.cjs
+npm run dist -- --config.directories.output=release-0.7.0
+node tests/packaged.cjs "release-0.7.0/win-unpacked/Agent Memory Console.exe"
+node tests/repository-packaged.cjs "release-0.7.0/win-unpacked/Agent Memory Console.exe"
+node tests/portable.cjs "release-0.7.0/Agent-Memory-Console-0.7.0-win-x64.exe"
+```
+
+后台线程异常后不会自动重试未知写入；需重启应用并核对最近操作。暂停只阻止后续自动步骤，已开始写入的同步仍执行收尾/回滚。应用关闭保护保留，测试并未以强杀在途任务作为取消实现。真实厂商账户、真实数据规模上限与极端低内存环境未在本轮验证。
+
+## v0.6.1 验证（2026-10-26）
 
 本轮增加双向同步冲突的时间推荐、共享来源统一选择、批量处理及 CSV 清单。所有写入与内容断言使用隔离人工夹具，不读取用户截图中的文件正文。
 

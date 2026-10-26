@@ -76,6 +76,10 @@ export class ConsoleService {
     if (!a) throw new Error("未知 Agent");
     return a;
   }
+  /** Trusted host-only bootstrap data for the isolated repository worker. */
+  workerContext() {
+    return { storage: this.storage, adapters: this.adapters, protectedRoots: [...this.protectedRoots] };
+  }
   settings(id: AgentId): AgentConfig {
     this.adapter(id);
     return this.config.agents[id] || {};
