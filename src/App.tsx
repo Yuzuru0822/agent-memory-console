@@ -12,7 +12,6 @@ import {
   ArrowUpRight,
   Boxes,
   Check,
-  CheckCheck,
   ChevronRight,
   CircleHelp,
   Clock3,
@@ -22,7 +21,6 @@ import {
   Folder,
   FolderOpen,
   Gift,
-  GitCompareArrows,
   History,
   Layers3,
   LayoutDashboard,
@@ -52,14 +50,13 @@ import InteropPanel from "./InteropPanel";
 import type { TaskControlsSnapshot } from "./task-types";
 
 const api = window.consoleApi;
-type Tab = "overview" | "tasks" | "repository" | "rewards" | "interop" | "sync" | "backups" | "activity" | "integrations";
+type Tab = "overview" | "tasks" | "repository" | "rewards" | "interop" | "backups" | "activity" | "integrations";
 const nav = [
   { id: "overview", name: "监控总览", icon: LayoutDashboard },
   { id: "tasks", name: "任务中心", icon: ListChecks },
   { id: "repository", name: "统一仓库", icon: Database },
   { id: "rewards", name: "积分福利", icon: Gift },
   { id: "interop", name: "MCP 与互联", icon: Network },
-  { id: "sync", name: "记忆与技能", icon: Layers3 },
   { id: "backups", name: "备份快照", icon: History },
   { id: "activity", name: "活动台账", icon: Activity },
   { id: "integrations", name: "集成能力", icon: Boxes },
@@ -74,7 +71,6 @@ const time = (value?: string) =>
   value ? new Date(value).toLocaleTimeString("zh-CN", { hour12: false }) : "—";
 const date = (value: string) =>
   new Date(value).toLocaleString("zh-CN", { hour12: false });
-const short = (value?: string) => (value ? value.slice(0, 12) : "未设置");
 function Badge({
   children,
   tone = "muted",
@@ -127,7 +123,6 @@ function SkillLinks({ info }: { info?: SkillsInfo }) {
 export default function App() {
   const [data, setData] = useState<Snapshot>();
   const [tab, setTab] = useState<Tab>("overview");
-  const [selected, setSelected] = useState<AgentId[]>([]);
   const [detail, setDetail] = useState<AgentId>();
   const [plan, setPlan] = useState<Plan>();
   const [planIndex, setPlanIndex] = useState(0);
@@ -238,135 +233,24 @@ export default function App() {
       setBusy(false);
     }
   }
-  function preview(mode: "memory" | "skills") {
-    void run(async () => {
-      const p = await api!.preview(mode, selected);
-      setPlan(p);
-      setPlanIndex(0);
-    });
-  }
   const current = data?.agents.find((a) => a.id === detail);
   const ready = data?.agents.filter((a) => a.state === "ready").length || 0;
   const attention =
     data?.agents.filter((a) => a.state === "attention").length || 0;
-  const consistent = data?.agents.filter((a) => a.sync === "same").length || 0;
+  const managed = data?.repository?.agentIds.length || 0;
   const filtered =
     data?.agents.filter(
       (a) =>
         (statusFilter === "all" || a.state === statusFilter) &&
         (a.name + " " + a.subtitle).toLowerCase().includes(query.toLowerCase()),
     ) || [];
-  const allIds = data?.agents.map((a) => a.id) || [];
 
-  function Sources() {
-    return (
-      <>
-      <div className="repository-entry">
-        <Database size={26} />
-        <div><strong>用统一 Git 仓库管理所有 Agent</strong><p>独立目录保存多份记忆与共享技能，支持双向合并、定时同步和技能 junction 连接。</p></div>
-        <button className="primary" onClick={() => setTab("repository")}>进入统一仓库<ArrowRight size={14} /></button>
-      </div>
-      <p className="legacy-source-heading">兼容模式 · 现有单文件共享源与单向复制仍可继续使用</p>
-      <section className="source-grid" id="sources">
-        <div className="panel source-panel">
-          <div className="section-title">
-            <span>
-              <Database size={17} />
-              共享记忆源
-            </span>
-            <span className="eyebrow">CANONICAL MEMORY</span>
-          </div>
-          <p className="secondary">
-            将一份 Markdown 作为同步来源，明确选择目标后预览差异。
-          </p>
-          <Path value={data?.canonicalMemory.path} />
-          <div className="source-stats">
-            <span>
-              内容指纹 <strong>{short(data?.canonicalMemory.hash)}</strong>
-            </span>
-            <Badge tone={data?.canonicalMemory.hash ? "green" : "muted"}>
-              {data?.canonicalMemory.hash ? "源文件可读" : "待选择"}
-            </Badge>
-          </div>
-          {data?.canonicalMemory.error && (
-            <p className="error-text">{data.canonicalMemory.error}</p>
-          )}
-          <div className="inline-actions">
-            <button
-              disabled={busy}
-              onClick={() => void run(() => api!.pick(null, "canonicalMemory"))}
-            >
-              <Folder size={14} />
-              选择记忆文件
-            </button>
-            <button
-              className="ghost"
-              disabled={!data?.canonicalMemory.exists || busy}
-              onClick={() => void run(() => api!.reveal(null, "memory"))}
-            >
-              定位文件
-              <ArrowUpRight size={13} />
-            </button>
-          </div>
-        </div>
-        <div className="panel source-panel">
-          <div className="section-title">
-            <span>
-              <Layers3 size={17} />
-              共享技能库
-            </span>
-            <span className="eyebrow">SKILL LIBRARY</span>
-          </div>
-          <p className="secondary">
-            只同步文本文件；跳过脚本、二进制和隐藏目录，不执行技能。
-          </p>
-          <Path value={data?.canonicalSkills.path} />
-          <div className="source-stats">
-            <span>
-              SKILL.md <strong>{data?.canonicalSkills.count || 0}</strong>{" "}
-              <span className="dot-separator">·</span> 文本候选{" "}
-              <strong>{data?.canonicalSkills.files || 0}</strong>
-            </span>
-            <Badge
-              tone={
-                data?.canonicalSkills.warnings?.length ? "amber" : data?.canonicalSkills.exists && !data.canonicalSkills.error
-                  ? "green"
-                  : "muted"
-              }
-            >
-              {data?.canonicalSkills.warnings?.length ? "部分项目需检查" : data?.canonicalSkills.exists && !data.canonicalSkills.error
-                ? "目录可读"
-                : "待检查"}
-            </Badge>
-          </div>
-          {data?.canonicalSkills.error && (
-            <p className="error-text">{data.canonicalSkills.error}</p>
-          )}
-          <SkillLinks info={data?.canonicalSkills} />
-          <div className="inline-actions">
-            <button
-              disabled={busy}
-              onClick={() => void run(() => api!.pick(null, "canonicalSkills"))}
-            >
-              <Folder size={14} />
-              选择技能源
-            </button>
-            {data?.canonicalSkills.linked && <button disabled={busy} onClick={() => void run(() => api!.approveSkillLinks(null))}>
-              <ShieldCheck size={14} />授权技能链接
-            </button>}
-            <button
-              className="ghost"
-              disabled={!data?.canonicalSkills.exists || busy}
-              onClick={() => void run(() => api!.reveal(null, "skills"))}
-            >
-              定位目录
-              <ArrowUpRight size={13} />
-            </button>
-          </div>
-        </div>
-      </section>
-      </>
-    );
+  function RepositoryEntry() {
+    return <div className="repository-entry">
+      <Database size={26} />
+      <div><strong>统一管理记忆与技能</strong><p>在统一仓库中选择纳管 Agent，预览双向同步、管理 Git 版本与技能连接。</p><Path value={data?.repository?.root} /></div>
+      <button className="primary" onClick={() => setTab("repository")}>进入统一仓库<ArrowRight size={14} /></button>
+    </div>;
   }
   function Backups({ compact = false }: { compact?: boolean }) {
     const rows = compact ? data?.backups.slice(0, 4) : data?.backups;
@@ -601,8 +485,8 @@ export default function App() {
                     <p>
                       发现{" "}
                       {data.agents.filter((a) => a.state !== "missing").length}{" "}
-                      个 Agent 的本地文件或程序 · {consistent}{" "}
-                      份记忆与共享源一致 · 未授权路径不会被同步
+                      个 Agent 的本地文件或程序 · {managed}{" "}
+                      个已纳入统一仓库 · 未授权路径不会被同步
                     </p>
                   </div>
                   <div className="health-metrics">
@@ -614,9 +498,9 @@ export default function App() {
                       </strong>
                     </div>
                     <div>
-                      <span>共享版本</span>
+                      <span>仓库纳管</span>
                       <strong className="mono">
-                        {data.canonicalMemory.hash?.slice(0, 8) || "—"}
+                        {managed} / {data.agents.length}
                       </strong>
                     </div>
                     <div>
@@ -676,18 +560,7 @@ export default function App() {
                         <span>
                           MEMORY UNIT <span>· {a.id.toUpperCase()}</span>
                         </span>
-                        <input
-                          type="checkbox"
-                          aria-label={`选择 ${a.name}`}
-                          checked={selected.includes(a.id)}
-                          onChange={(e) =>
-                            setSelected((ids) =>
-                              e.target.checked
-                                ? [...ids, a.id]
-                                : ids.filter((id) => id !== a.id),
-                            )
-                          }
-                        />
+                        <Badge tone={data.repository?.agentIds.includes(a.id) ? "green" : "muted"}>{data.repository?.agentIds.includes(a.id) ? "已纳管" : "未纳管"}</Badge>
                       </div>
                       <div className="agent-identity">
                         <div className="avatar">
@@ -730,21 +603,10 @@ export default function App() {
                           <strong>
                             {a.memory.hash?.slice(0, 10) || "尚未读取记忆"}
                           </strong>
-                          <span>
-                            {a.sync === "same" ? (
-                              <CheckCheck size={15} />
-                            ) : a.sync === "different" ? (
-                              <GitCompareArrows size={15} />
-                            ) : null}
-                          </span>
                         </div>
                         <div className="memory-caption">
                           <span>
-                            {a.sync === "same"
-                              ? "与共享记忆一致"
-                              : a.sync === "different"
-                                ? "与共享记忆有差异"
-                                : "配置共享源后可比较"}
+                            {data.repository?.agentIds.includes(a.id) ? "到统一仓库预览同步差异" : "可在统一仓库中选择纳管"}
                           </span>
                           <span>
                             {a.memoryApproved ? "已授权" : "只读发现"}
@@ -799,44 +661,6 @@ export default function App() {
                   ))}
                 </div>
                 {!filtered.length && <Empty>没有符合条件的 Agent。</Empty>}
-                <div className="sync-bar">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={selected.length === allIds.length}
-                      onChange={(e) =>
-                        setSelected(e.target.checked ? allIds : [])
-                      }
-                    />
-                    已选 {selected.length} 个
-                  </label>
-                  <button
-                    className="primary"
-                    disabled={
-                      !selected.length || busy || !data.canonicalMemory.hash
-                    }
-                    onClick={() => preview("memory")}
-                  >
-                    <GitCompareArrows size={15} />
-                    预览记忆同步
-                  </button>
-                  <button
-                    disabled={
-                      !selected.length ||
-                      busy ||
-                      !data.canonicalSkills.exists ||
-                      !!data.canonicalSkills.error
-                    }
-                    onClick={() => preview("skills")}
-                  >
-                    <Layers3 size={15} />
-                    预览技能同步
-                  </button>
-                  <span>
-                    <ShieldCheck size={13} />
-                    先预览 · 再确认 · 自动备份
-                  </span>
-                </div>
                 <div className="notice-strip">
                   <span className="online-dot" />
                   文件状态来自实际检查；积分余额需单独配置监控，登录状态与厂商会话尚未接入。
@@ -845,38 +669,37 @@ export default function App() {
                     <ArrowRight size={13} />
                   </button>
                 </div>
-                <Sources />
+                <RepositoryEntry />
                 <div className="lower-grid">
                   <section className="panel fingerprint-panel">
                     <div className="section-title">
                       <span>
                         <Fingerprint size={17} />
-                        内容寻址指纹
+                        仓库管理
                       </span>
-                      <span className="eyebrow">SHA-256</span>
+                      <span className="eyebrow">LOCAL GIT</span>
                     </div>
                     <div className="fingerprint-orbit">
-                      <Fingerprint size={45} />
+                      <Database size={45} />
                     </div>
                     <div className="key-value">
-                      <span>当前共享记忆</span>
-                      <code>{short(data.canonicalMemory.hash)}</code>
+                      <span>统一仓库</span>
+                      <strong>{data.repository ? "已配置" : "待配置"}</strong>
                     </div>
                     <div className="key-value">
-                      <span>已一致 Agent</span>
-                      <strong className="green-text">{consistent} / {data.agents.length}</strong>
+                      <span>已纳管 Agent</span>
+                      <strong className="green-text">{managed} / {data.agents.length}</strong>
                     </div>
                     <div className="key-value">
                       <span>活动记录</span>
                       <strong>{data.logs[0]?.seq || 0} 条</strong>
                     </div>
                     <div className="key-value">
-                      <span>备份策略</span>
-                      <strong>写入前快照 · 无自动清理</strong>
+                      <span>自动同步</span>
+                      <strong>{data.repository?.automation.enabled ? "已启用 · 详见任务中心" : "未启用"}</strong>
                     </div>
                     <p className="footnote">
-                      哈希用于检查一致性。未采集 token
-                      使用量，也不推断模型上下文额度。
+                      纳管表示已选择管理范围；文件差异和冲突以统一仓库的双向同步预览为准。
                     </p>
                   </section>
                   <Logs compact />
@@ -890,133 +713,6 @@ export default function App() {
             {tab === "rewards" && <RewardsPanel />}
             {tab === "interop" && <InteropPanel onRepository={() => setTab("repository")} />}
             {tab === "tasks" && <TaskCenterPanel onNavigate={setTab} onControls={snapshot => { setTaskControls(snapshot); setTaskControlsError(undefined); }} />}
-            {tab === "sync" && (
-              <>
-                <div className="page-heading">
-                  <h2>共享源同步 · 兼容模式</h2>
-                  <p>
-                    这里保留原有单向同步。多文件记忆、双向合并与自动同步请使用统一仓库。
-                  </p>
-                </div>
-                <Sources />
-                <section className="panel">
-                  <div className="section-title">
-                    <span>
-                      <GitCompareArrows size={17} />
-                      同步目标
-                    </span>
-                    <span className="secondary">
-                      选择 Agent 后生成逐文件差异
-                    </span>
-                  </div>
-                  <div className="target-list">
-                    {data.agents.map((a) => (
-                      <label key={a.id}>
-                        <input
-                          type="checkbox"
-                          checked={selected.includes(a.id)}
-                          onChange={(e) =>
-                            setSelected((ids) =>
-                              e.target.checked
-                                ? [...ids, a.id]
-                                : ids.filter((id) => id !== a.id),
-                            )
-                          }
-                        />
-                        <span
-                          className="mini-avatar"
-                          style={{ color: a.accent }}
-                        >
-                          {a.glyph}
-                        </span>
-                        <strong>{a.name}</strong>
-                        <Badge tone={a.memoryApproved ? "green" : "muted"}>
-                          记忆{a.memoryApproved ? "已授权" : "未授权"}
-                        </Badge>
-                        <Badge tone={a.skillsApproved ? "green" : "muted"}>
-                          技能{a.skillsApproved ? "已授权" : "未授权"}
-                        </Badge>
-                        <button
-                          className="ghost small"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            setDetail(a.id);
-                          }}
-                        >
-                          配置
-                          <ChevronRight size={13} />
-                        </button>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="inline-actions">
-                    <button
-                      className="primary"
-                      disabled={
-                        !selected.length || !data.canonicalMemory.hash || busy
-                      }
-                      onClick={() => preview("memory")}
-                    >
-                      <GitCompareArrows size={15} />
-                      预览记忆同步
-                    </button>
-                    <button
-                      disabled={
-                        !selected.length ||
-                        !data.canonicalSkills.exists ||
-                        !!data.canonicalSkills.error ||
-                        busy
-                      }
-                      onClick={() => preview("skills")}
-                    >
-                      <Layers3 size={15} />
-                      预览技能同步
-                    </button>
-                  </div>
-                </section>
-                <section className="panel">
-                  <div className="section-title">
-                    <span>
-                      <Link2 size={17} />
-                      技能目录检查
-                    </span>
-                    <Badge>安全文本复制</Badge>
-                  </div>
-                  {data.agents.map((a) => (
-                    <div className="skill-row" key={a.id}>
-                      <div>
-                        <strong>{a.name}</strong>
-                        <Badge
-                          tone={
-                            a.skills.error || a.skills.warnings?.length
-                              ? "amber"
-                              : a.skills.exists
-                                ? "green"
-                                : "muted"
-                          }
-                        >
-                          {a.skills.error
-                              ? "检查失败"
-                              : a.skills.warnings?.length
-                                ? "部分项目需检查"
-                                : a.skills.linked
-                                  ? `含 ${a.skills.links?.length || 0} 个链接`
-                              : a.skills.exists
-                                ? "可读取"
-                                : "未发现"}
-                        </Badge>
-                      </div>
-                      <Path value={a.skills.path} />
-                      <p>
-                        {a.skills.error ||
-                          `${a.skills.count} 个 SKILL.md · ${a.skills.files} 个文本候选`}
-                      </p>
-                      <SkillLinks info={a.skills} />
-                    </div>
-                  ))}
-                </section>
-              </>
-            )}
             {tab === "backups" && (
               <>
                 <div className="page-heading">
@@ -1137,7 +833,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.7.0</b>
+                AGENT MEMORY CONSOLE <b>v0.7.1</b>
               </span>
             </footer>
           </>
@@ -1382,13 +1078,13 @@ export default function App() {
             className="plan-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="同步与恢复预览"
+            aria-label="备份恢复预览"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="drawer-heading">
               <div>
                 <span className="eyebrow">REVIEW BEFORE WRITE</span>
-                <h2>同步与恢复预览</h2>
+                <h2>备份恢复预览</h2>
               </div>
               <button
                 className="icon-button"
@@ -1474,7 +1170,7 @@ export default function App() {
               </>
             ) : (
               <Empty>
-                所选已授权目标与来源一致，或没有可写入的已授权目标。
+                当前文件与备份内容一致，或没有可恢复的已授权目标。
               </Empty>
             )}
             <div className="plan-footer">

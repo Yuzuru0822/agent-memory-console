@@ -304,9 +304,15 @@ export class ConsoleService {
   ): Snapshot {
     const canonicalMemory = this.fileInfo(this.config.canonicalMemory);
     const audit = this.verifyAudit();
+    const repository = this.config.repository;
     return {
       at: new Date().toISOString(),
       storagePath: this.storage,
+      repository: typeof repository?.root === "string" && Array.isArray(repository.agentIds) && repository.automation && typeof repository.automation === "object" ? {
+        root: repository.root,
+        agentIds: repository.agentIds.filter(id => this.adapters.some(agent => agent.id === id)),
+        automation: { ...repository.automation },
+      } : undefined,
       canonicalMemory,
       canonicalSkills: this.skillsInfo(this.config.canonicalSkills),
       agents: this.adapters.map((a) => {

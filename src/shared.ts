@@ -100,6 +100,8 @@ export interface Backup {
 export interface Snapshot {
   at: string;
   agents: AgentView[];
+  /** Configuration summary only; membership does not imply matching contents. */
+  repository?: Pick<RepositoryConfig, "root" | "agentIds" | "automation">;
   canonicalMemory: FileInfo;
   canonicalSkills: SkillsInfo;
   backups: Backup[];

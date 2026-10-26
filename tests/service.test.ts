@@ -4,6 +4,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { fixture } from "./helpers";
 
+test("overview repository membership stays separate from legacy source equality and tolerates damaged settings", (t) => {
+  const { service, file, dir } = fixture(t);
+  const memory = file("home/.claude/CLAUDE.md", "shared");
+  service.bind(null, "canonicalMemory", file("shared.md", "shared"));
+  assert.equal(service.snapshot().repository, undefined);
+  service.config.repository = {
+    root: dir("central"), agentIds: ["trae"], memoryFolders: {},
+    automation: { enabled: false, intervalSeconds: 60, cleanupEnabled: false, retentionDays: 30, minBackups: 20 },
+  };
+  const snapshot = service.snapshot();
+  assert.equal(snapshot.agents.find(agent => agent.id === "claude")?.sync, "same");
+  assert.deepEqual(snapshot.repository?.agentIds, ["trae"], "legacy equality must not invent repository membership");
+  snapshot.repository!.agentIds.push("claude");
+  snapshot.repository!.automation.enabled = true;
+  assert.deepEqual(service.config.repository.agentIds, ["trae"]);
+  assert.equal(service.config.repository.automation.enabled, false);
+  (service.config.repository as unknown as Record<string, unknown>).agentIds = null;
+  assert.equal(service.snapshot().repository, undefined, "damaged membership must not take down the overview");
+  assert.equal(fs.readFileSync(memory, "utf8"), "shared");
+});
+
 test("discovery is read-only and grants no write authorization", (t) => {
   const { file, service } = fixture(t);
   file("home/.claude/CLAUDE.md", "discovered");

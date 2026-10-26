@@ -94,6 +94,24 @@ const path = require("node:path");
       assert.ok(registeredIds.includes(id), `registered adapter must remain available: ${id}`);
     assert.equal(await page.locator(".agent-card").count(), initialSnapshot.agents.length);
     assert.equal(await page.locator(".filter-group .filter").first().locator("b").innerText(), String(initialSnapshot.agents.length));
+    assert.equal(await page.getByRole("button", { name: "记忆与技能", exact: true }).count(), 0, "retired source-sync navigation must be absent");
+    assert.equal(await page.getByRole("button", { name: "预览记忆同步", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "预览技能同步", exact: true }).count(), 0);
+    assert.equal(await page.getByLabel("选择 WorkBuddy", { exact: true }).count(), 0, "overview must not retain legacy sync selection");
+    assert.equal(await page.getByText("共享记忆源", { exact: true }).count(), 0);
+    assert.equal(initialSnapshot.repository, undefined, "legacy source settings must not implicitly create a repository");
+    assert.equal(await page.locator(".agent-card .card-top").getByText("未纳管", { exact: true }).count(), initialSnapshot.agents.length);
+    assert.doesNotMatch(await page.locator(".health-banner").innerText(), /与共享源一致|共享版本/);
+    assert.doesNotMatch((await page.locator(".memory-caption").allInnerTexts()).join("\n"), /与共享记忆一致|与共享记忆有差异|配置共享源后可比较/);
+    await page.getByRole("button", { name: "统一仓库", exact: true }).click();
+    await page.getByRole("heading", { name: "统一记忆与技能仓库", exact: true }).waitFor();
+    assert.equal(await page.getByText("共享记忆源", { exact: true }).count(), 0);
+    await page.getByRole("button", { name: "监控总览", exact: true }).click();
+    const preservedSources = JSON.parse(fs.readFileSync(path.join(data, "console-data", "config.json"), "utf8"));
+    assert.equal(preservedSources.canonicalMemory, source, "removing the legacy UI must retain old source configuration");
+    assert.equal(preservedSources.canonicalSkills, skillSource);
+    assert.equal(fs.readFileSync(source, "utf8"), after, "navigation must not rewrite old shared memory");
+    assert.equal(fs.readFileSync(target, "utf8"), before, "navigation must not automatically migrate Agent memory");
     assert.equal(await page.evaluate(() => typeof window.require), "undefined");
     assert.equal(
       await page.evaluate(() => typeof window.consoleApi.snapshot),
@@ -216,24 +234,17 @@ const path = require("node:path");
     assert.equal(fs.lstatSync(skillLink).isSymbolicLink(), true);
     await page.screenshot({ path: path.join(results, "linked-skills.png") });
     await page.getByRole("button", { name: "关闭详情", exact: true }).click();
-    await page.getByLabel("选择 WorkBuddy", { exact: true }).check();
-    await page
-      .getByRole("button", { name: "预览记忆同步", exact: true })
-      .click();
-    await page.getByRole("dialog", { name: "同步与恢复预览" }).waitFor();
-    assert.match(await page.locator(".diff").innerText(), /Local memory/);
-    assert.match(await page.locator(".diff").innerText(), /Shared memory/);
-    await page.screenshot({ path: path.join(results, "sync-preview.png") });
+    // Create historical backups through the retained compatibility IPC. The
+    // retired source-sync workflow is intentionally unavailable in navigation.
+    const legacyMemory = await page.evaluate(() => window.consoleApi.preview("memory", ["workbuddy"]));
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({
         response: 0,
         checkboxChecked: false,
       });
     });
-    await page.getByRole("button", { name: "确认并执行", exact: true }).click();
-    await page
-      .getByRole("dialog", { name: "同步与恢复预览" })
-      .waitFor({ state: "detached" });
+    const cancelledMemory = await page.evaluate(id => window.consoleApi.apply(id), legacyMemory.id);
+    assert.match(cancelledMemory.message, /已取消/);
     assert.equal(
       fs.readFileSync(target, "utf8"),
       before,
@@ -245,26 +256,13 @@ const path = require("node:path");
         checkboxChecked: false,
       });
     });
-    await page
-      .getByRole("button", { name: "预览记忆同步", exact: true })
-      .click();
-    await page.getByRole("dialog", { name: "同步与恢复预览" }).waitFor();
-    await page.getByRole("button", { name: "确认并执行", exact: true }).click();
-    await page
-      .getByRole("dialog", { name: "同步与恢复预览" })
-      .waitFor({ state: "detached" });
+    await page.evaluate(id => window.consoleApi.apply(id), legacyMemory.id);
     assert.equal(fs.readFileSync(target, "utf8"), after);
     let state = await page.evaluate(() => window.consoleApi.snapshot());
     assert.equal(state.backups.length, 1);
     assert.equal(state.auditValid, true);
-    await page
-      .getByRole("button", { name: "预览技能同步", exact: true })
-      .click();
-    await page.getByRole("dialog", { name: "同步与恢复预览" }).waitFor();
-    await page.getByRole("button", { name: "确认并执行", exact: true }).click();
-    await page
-      .getByRole("dialog", { name: "同步与恢复预览" })
-      .waitFor({ state: "detached" });
+    const legacySkills = await page.evaluate(() => window.consoleApi.preview("skills", ["workbuddy"]));
+    await page.evaluate(id => window.consoleApi.apply(id), legacySkills.id);
     assert.equal(
       fs.readFileSync(path.join(skillTarget, "review", "SKILL.md"), "utf8"),
       fs.readFileSync(path.join(skillSource, "review", "SKILL.md"), "utf8"),
@@ -283,12 +281,36 @@ const path = require("node:path");
     assert.equal(fs.readFileSync(path.join(skillActual, "SKILL.md"), "utf8"), skillBefore);
     assert.equal(fs.readFileSync(path.join(skillLink, "SKILL.md"), "utf8"), skillBefore);
     assert.equal(fs.lstatSync(skillLink).isSymbolicLink(), true, "restore must preserve the junction");
-    const restore = await page.evaluate(
-      (id) => window.consoleApi.restore(id),
-      state.backups[0].id,
-    );
-    await page.evaluate((id) => window.consoleApi.apply(id), restore.id);
+    // Existing snapshots remain recoverable from the visible backup module.
+    await page.getByRole("button", { name: "刷新", exact: true }).click();
+    await page.getByRole("button", { name: "备份快照", exact: true }).click();
+    const restoreState = await page.evaluate(() => window.consoleApi.snapshot());
+    const memoryBackupIndex = restoreState.backups.findIndex(backup => backup.id === state.backups[0].id);
+    assert.ok(memoryBackupIndex >= 0);
+    await page.waitForFunction(count => document.querySelectorAll(".backup-row").length === count, restoreState.backups.length);
+    const restoreMemoryInUi = async () => {
+      await page.locator(".backup-row").nth(memoryBackupIndex).getByRole("button", { name: "预览恢复", exact: true }).click();
+      await page.getByRole("dialog", { name: "备份恢复预览" }).waitFor();
+      assert.match(await page.locator(".diff").innerText(), /Local memory/);
+      assert.match(await page.locator(".diff").innerText(), /Shared memory/);
+    };
+    await restoreMemoryInUi();
+    await page.screenshot({ path: path.join(results, "restore-preview.png") });
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
+    });
+    await page.getByRole("button", { name: "确认并执行", exact: true }).click();
+    await page.getByRole("dialog", { name: "备份恢复预览" }).waitFor({ state: "detached" });
+    assert.equal(fs.readFileSync(target, "utf8"), after, "cancelled UI restore must not write memory");
+    await restoreMemoryInUi();
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+    });
+    await page.getByRole("button", { name: "确认并执行", exact: true }).click();
+    await page.getByRole("dialog", { name: "备份恢复预览" }).waitFor({ state: "detached" });
     assert.equal(fs.readFileSync(target, "utf8"), before);
+    assert.equal((await page.evaluate(() => window.consoleApi.snapshot())).auditValid, true);
+    await page.getByRole("button", { name: "监控总览", exact: true }).click();
     const invalid = await page.evaluate(async () => {
       try {
         await window.consoleApi.backup("not-an-agent");
@@ -320,6 +342,14 @@ const path = require("node:path");
         .isDisabled(),
       true,
     );
+    const backupCountBeforeManual = (await page.evaluate(() => window.consoleApi.snapshot())).backups.length;
+    await page.getByRole("button", { name: "备份当前记忆与技能", exact: true }).click();
+    await page.waitForFunction(async count => (await window.consoleApi.snapshot()).backups.length === count + 1, backupCountBeforeManual);
+    const manualBackupState = await page.evaluate(() => window.consoleApi.snapshot());
+    assert.equal(manualBackupState.backups[0].label, "手动快照", "Agent details must still allow an independent backup");
+    assert.equal(manualBackupState.backups[0].files, 2);
+    assert.equal(fs.readFileSync(target, "utf8"), before, "manual backup must not rewrite memory");
+    assert.equal(fs.readFileSync(path.join(skillActual, "SKILL.md"), "utf8"), skillBefore);
     await page.screenshot({ path: path.join(results, "agent-details.png") });
     await page.getByRole("button", { name: "关闭详情", exact: true }).click();
     await page.locator(".agent-card").filter({hasText:"Claude Code CLI"}).getByRole("button", {name:/查看检查与配置/}).click();
@@ -348,13 +378,17 @@ const path = require("node:path");
     assert.equal((await page.evaluate(()=>window.consoleApi.snapshot())).agents.find(a=>a.id==='claude').npmInstallation,undefined);
     await page.getByRole("button", { name: "关闭详情", exact: true }).click();
     for (const label of [
-      "记忆与技能",
+      "统一仓库",
       "备份快照",
       "活动台账",
       "集成能力",
       "监控总览",
     ]) {
       await page.getByRole("button", { name: label, exact: true }).click();
+      if (label === "统一仓库") {
+        await page.getByRole("heading", { name: "统一记忆与技能仓库", exact: true }).waitFor();
+        assert.equal(await page.getByText("共享记忆源", { exact: true }).count(), 0);
+      }
       if (label === "集成能力") {
         assert.equal(await page.locator(".integration-row").count(), initialSnapshot.agents.length);
         const qoderIntegration = page.locator(".integration-row").filter({ hasText: "Qoder" });
@@ -387,8 +421,12 @@ const path = require("node:path");
       fullPage: true,
     });
     assert.deepEqual(errors, []);
+    const finalConfig = JSON.parse(fs.readFileSync(path.join(data, "console-data", "config.json"), "utf8"));
+    assert.equal(finalConfig.canonicalMemory, source);
+    assert.equal(finalConfig.canonicalSkills, skillSource);
+    assert.equal(fs.readFileSync(source, "utf8"), after);
     console.log(
-      `PASS desktop: real Electron, ${initialSnapshot.agents.length} registered adapters, Qoder discovery/card/path authorization/cancel/revocation and file-only capabilities, isolated preload, linked-skill display/cancel/approval, junction-preserving skill sync/restore, preview, cancel, memory sync, backups, restore, invalid IPC, launch authorization, npm discovery/cancel/approval/revocation, navigation, responsive layout.`,
+      `PASS desktop: real Electron, ${initialSnapshot.agents.length} registered adapters, Qoder discovery/card/path authorization/cancel/revocation and file-only capabilities, isolated preload, linked-skill display/cancel/approval, compatibility IPC fixtures and junction-preserving restore, visible historical backup preview/cancel/restore, retired legacy UI and preserved source settings, unified repository navigation, invalid IPC, launch authorization, npm discovery/cancel/approval/revocation, responsive layout.`,
     );
     console.log("Screenshots: " + results);
   } finally {
