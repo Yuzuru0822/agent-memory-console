@@ -24,7 +24,7 @@ async function settle(service: WorkbenchService, id: string) {
   throw new Error('run did not finish');
 }
 function setup(t: any, runner: Runner = async () => ({ text: 'answer', inputTokens: 10, outputTokens: 5 })) {
-  const f = fixture(t), workbench = new WorkbenchService(f.service, codec, undefined, undefined, runner); t.after(() => workbench.close()); return { ...f, workbench };
+  let workbench: WorkbenchService; const f = fixture(t, () => workbench?.close()); workbench = new WorkbenchService(f.service, codec, undefined, undefined, runner); return { ...f, workbench };
 }
 test('legacy migration is idempotent and leaves existing config untouched', async t => {
   const f = fixture(t), before = JSON.stringify(f.service.config);
@@ -79,17 +79,17 @@ test('workspace tools enforce paths and detect modifications during approval', a
   assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'other');
 });
 test('tool approval is required, one-use, and tied to a run', async t => {
-  const f = fixture(t), root = f.dir('project'); f.file('project/a.txt', 'approved content');
-  const w = new WorkbenchService(f.service, codec, undefined, undefined, async i => ({ text: await i.tools[0].call({ path: 'a.txt' }) })); t.after(() => w.close());
+  let w: WorkbenchService; const f = fixture(t, () => w?.close()), root = f.dir('project'); f.file('project/a.txt', 'approved content');
+  w = new WorkbenchService(f.service, codec, undefined, undefined, async i => ({ text: await i.tools[0].call({ path: 'a.txt' }) }));
   w.saveAgent({ ...agent(), workspace: root }); const s = w.newSession('test'), r = w.send(s.id, 'read');
   await new Promise(r => setTimeout(r, 10)); const approval = w.snapshot().approvals[0]; assert.ok(approval); assert.equal(approval.runId, r.id); w.approve(approval.id, true);
   assert.throws(() => w.approve(approval.id, true), /过期/); assert.equal((await settle(w, r.id)).output, 'approved content');
 });
 test('bridge dispatch is deduplicated and replies retain console-user provenance', async t => {
-  const f = fixture(t), bridge = new AgentBridge(f.service, codec), config = bridge.snapshot().config;
+  let w: WorkbenchService; const f = fixture(t, () => w?.close()), bridge = new AgentBridge(f.service, codec), config = bridge.snapshot().config;
   config.agents.forEach(a => { a.enabled = true; a.allowTargets = config.agents.filter(b => b.id !== a.id).map(b => b.id); }); bridge.configure(config);
   const task = await bridge.send({ source: 'claude', target: 'workbuddy', text: 'please review', messageId: 'stable' });
-  let calls = 0; const w = new WorkbenchService(f.service, codec, undefined, bridge, async () => { calls++; return { text: 'reviewed' }; }); t.after(() => w.close()); w.saveAgent(agent());
+  let calls = 0; w = new WorkbenchService(f.service, codec, undefined, bridge, async () => { calls++; return { text: 'reviewed' }; }); w.saveAgent(agent());
   const r = w.dispatch(task.id, 'test'); assert.equal(w.dispatch(task.id, 'test').id, r.id); await settle(w, r.id); assert.equal(calls, 1);
   const updated = bridge.snapshot().tasks.find(t => t.id === task.id)!; assert.equal(updated.state, 'completed'); assert.equal(updated.messages.at(-1)?.by, 'console-user');
 });
@@ -145,4 +145,25 @@ test('stream redaction protects credentials split across arbitrary chunk boundar
     const r = new SecretRedactor(['secret-token']); const output = r.push(source.slice(0, cut)) + r.push(source.slice(cut)) + r.finish();
     assert.equal(output, 'before [REDACTED] after');
   }
+});
+test('Claude process adapter consumes structured result, resume and restricted flags', async t => {
+  const f = fixture(t), cwd = f.dir('cli-workspace');
+  const script = f.file('fake-cli.cjs', `
+    const assert = require('node:assert/strict');
+    const args = process.argv.slice(2);
+    assert.ok(args.includes('--safe-mode'));
+    assert.ok(args.includes('--disable-slash-commands'));
+    assert.equal(args[args.indexOf('--tools') + 1], '');
+    assert.equal(args[args.indexOf('--disallowedTools') + 1], 'mcp__*');
+    assert.equal(args[args.indexOf('--resume') + 1], 'previous-session');
+    let prompt = ''; process.stdin.on('data', c => prompt += c);
+    process.stdin.on('end', () => {
+      assert.ok(prompt.includes('follow-up'));
+      console.log(JSON.stringify({ type:'assistant', message:{ content:[{ type:'text', text:'cli answer' }] } }));
+      console.log(JSON.stringify({ type:'result', is_error:false, result:'cli answer', session_id:'next-session', usage:{ input_tokens:12, output_tokens:3 } }));
+    });
+  `);
+  let output = '';
+  const result = await runRuntime({ agent: { ...agent(), runtime: 'claude', workspace: cwd }, sessionId: 's', externalId: 'previous-session', messages: [{ role: 'user', content: 'follow-up' }], assets: [], tools: [], signal: new AbortController().signal, executable: process.execPath, args: [script], emit(_type, text) { output += text; } });
+  assert.equal(result.text, 'cli answer'); assert.equal(output, 'cli answer'); assert.equal(result.externalId, 'next-session'); assert.equal(result.inputTokens, 12);
 });

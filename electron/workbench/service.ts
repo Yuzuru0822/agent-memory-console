@@ -269,6 +269,7 @@ export class WorkbenchService {
     atomicWrite(file, `<!-- Reviewed from session ${sessionId}; ${now()} -->\n${text}\n`); this.console.audit('workbench.memory', sessionId); return file;
   }
   async close() {
+    if (this.closed) return;
     for (const control of this.controls.values()) control.controller.abort();
     await Promise.all([...this.controls.values()].map(c => c.promise)); this.closed = true; this.store.close();
   }

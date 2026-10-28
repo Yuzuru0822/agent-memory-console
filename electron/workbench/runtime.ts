@@ -65,7 +65,7 @@ async function api(input: RuntimeInput): Promise<RuntimeResult> {
 function claude(input: RuntimeInput): Promise<RuntimeResult> {
   return new Promise((resolve, reject) => {
     if (!input.executable || !input.agent.workspace) { reject(new Error('请先授权 Claude 程序与工作区')); return; }
-    const args = [...(input.args || []), '-p', '--output-format', 'stream-json', '--verbose', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'];
+    const args = [...(input.args || []), '-p', '--safe-mode', '--disable-slash-commands', '--output-format', 'stream-json', '--verbose', '--tools', '', '--disallowedTools', 'mcp__*', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'];
     if (input.externalId) args.push('--resume', input.externalId);
     const env = { ...process.env }; for (const k of Object.keys(env)) if (/^(NODE_OPTIONS|NODE_PATH|ELECTRON_RUN_AS_NODE)$/i.test(k)) delete env[k];
     const child = spawn(input.executable, args, { cwd: input.agent.workspace, shell: false, windowsHide: true, env, stdio: 'pipe', signal: input.signal });

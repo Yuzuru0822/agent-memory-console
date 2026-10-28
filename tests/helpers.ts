@@ -5,9 +5,9 @@ import type { TestContext } from "node:test";
 import { createAdapters } from "../electron/adapters";
 import { ConsoleService } from "../electron/service";
 
-export function fixture(t: TestContext) {
+export function fixture(t: TestContext, beforeCleanup?: () => void | Promise<void>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-console-test-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(async () => { await beforeCleanup?.(); fs.rmSync(root, { recursive: true, force: true }); });
   const file = (name: string, data: string | Buffer = "old content") => {
     const target = path.join(root, name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
