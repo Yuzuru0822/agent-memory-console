@@ -43,6 +43,7 @@ function linkTarget(raw: string, parent: string): string {
       throw new Error("技能链接不支持网络路径或设备路径");
     if (raw.includes(":")) return localPath(raw);
   }
+  if (/^(\\\\|\/\/)/.test(raw)) throw new Error("技能链接不支持网络路径或设备路径");
   return localPath(path.isAbsolute(raw) ? raw : path.resolve(parent, raw));
 }
 

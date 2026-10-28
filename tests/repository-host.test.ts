@@ -70,13 +70,16 @@ test("worker plans reject main-thread authorization changes and refresh grants o
 
 test("main and worker activity share one ordered audit writer while synchronization runs", async t => {
   const f = await memoryFixture(t), original = f.service.audit.bind(f.service), calls: string[] = [];
-  f.service.audit = (action, detail) => { calls.push(action); original(action, detail); };
+  f.service.audit = (action, detail) => {
+    // Synchronize on the actual worker audit request, not filesystem speed or a 75 ms timer.
+    if (action === "repository.sync") { calls.push("main.during"); original("main.during", "main activity while worker awaits audit acknowledgement"); }
+    calls.push(action); original(action, detail);
+  };
   fs.writeFileSync(f.memory, "updated\n");
   const plan = await f.host.preview();
   const operation = f.host.apply(plan.id, {});
   f.service.audit("main.before", "main thread remains available");
-  const timer = setInterval(() => f.service.audit("main.during", "concurrent main activity"), 75);
-  try { await operation; } finally { clearInterval(timer); }
+  await operation;
   f.service.audit("main.after", "completed");
   const audit = f.service.verifyAudit();
   assert.equal(audit.valid, true, audit.error);

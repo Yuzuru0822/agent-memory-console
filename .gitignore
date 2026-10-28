@@ -29,3 +29,6 @@ id_ed25519
 .agent-console-data/
 mcp-private.enc
 agent-bridge.private.json
+
+# Local encrypted workbench databases and sidecars
+workbench.sqlite*

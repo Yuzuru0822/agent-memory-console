@@ -1,6 +1,6 @@
 {
   "name": "agent-memory-console",
-  "version": "0.7.1",
+  "version": "1.0.0-rc.1",
   "private": true,
   "description": "Local Windows agent memory and skills console",
   "author": "Agent Console",
@@ -12,17 +12,21 @@
     "build": "tsc --noEmit -p tsconfig.json && npm run build:main && npm run build:rewards && vite build",
     "build:rewards": "node scripts/build-rewards.cjs",
     "start": "electron .",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
     "test:desktop": "node tests/desktop.cjs",
     "pack": "npm run build && electron-builder --win --x64 --dir",
-    "dist": "npm run build && electron-builder --win portable --x64"
+    "dist": "npm run build && electron-builder --win portable --x64",
+    "test:workbench": "node --import tsx --test tests/workbench.test.ts",
+    "test:workbench-ui": "node tests/workbench-ui.cjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
     "isomorphic-git": "1.44.3",
     "lucide-react": "^0.468.0",
     "node-diff3": "3.2.1",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

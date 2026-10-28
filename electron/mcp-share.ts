@@ -144,6 +144,14 @@ export class McpShareService {
     if (typeof name !== "string" || !VARIABLE.test(name) || typeof value !== "string" || value.length > 16000 || /[\0\r\n]/.test(value))
       throw new Error("私有变量名须为大写字母/数字/下划线，值须为不超过 16000 字的单行文本");
   }
+  /** Main-process-only resolution for explicitly approved native runs. Never expose through IPC. */
+  runtimeServer(id: string): { config: Record<string, unknown>; hash: string } {
+    this.audit();
+    if (this.privateError) throw new Error(this.privateError);
+    const template = this.manifest().value.servers[id];
+    if (!template) throw new Error("MCP 服务不存在");
+    return { config: renderTemplate(template, "claude", this.state.variables), hash: crypto.createHash("sha256").update(JSON.stringify(template)).digest("hex") };
+  }
   snapshot(): McpSnapshot {
     const snapshot: McpSnapshot = {
       templatesJson: json(EMPTY_MANIFEST), servers: [], variableNames: Object.keys(this.state.variables).sort(),
