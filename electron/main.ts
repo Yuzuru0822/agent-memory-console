@@ -1,3 +1,5 @@
+import { WorkbenchService } from "./workbench/service";
+import { registerWorkbench } from "./workbench/ipc";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell, session } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "node:path";
@@ -46,6 +48,7 @@ let tasks: TaskCenterService;
 let taskTray: TaskTray;
 let mcp: McpShareService;
 let bridge: AgentBridge;
+let workbench: WorkbenchService;
 let quitting = false;
 let rewardCalibrationUntil = 0;
 let busy = false;
@@ -129,6 +132,7 @@ function handler(
   });
 }
 function register() {
+  registerWorkbench(handler, workbench, window, confirm);
   handler("mcpSnapshot", () => mcp.snapshot(), false);
   handler("mcpSaveTemplates", (json: string) => mcp.saveTemplates(json));
   handler("mcpSetVariable", (name: string, value: string) => mcp.setVariable(name, value));
@@ -559,6 +563,7 @@ else {
       const privateCodec = createSecretCodec(safeStorage);
       mcp = new McpShareService(service, privateCodec);
       bridge = new AgentBridge(service, privateCodec);
+      workbench = new WorkbenchService(service, privateCodec, mcp, bridge);
       rewards = new RewardsService(service, rewardsBridge, undefined, undefined, async (id, reason) => {
         if (balances.isConfigured(id)) await balances.refresh(id, reason);
       });
@@ -607,6 +612,7 @@ else {
       register();
       const repositoryTimer = setInterval(() => {
         updateTray();
+        workbench.reconcileBridge();
         if (busy || !repository.healthy || repository.backgroundBusy || !window || window.isDestroyed() || !tasks.canRunAutomatic()) return;
         busy = true;
         void repository.tick(Date.now(), () => tasks.canRunAutomatic()).catch(error => console.error("Repository automatic task failed:", String(error)))
@@ -614,11 +620,21 @@ else {
           .then(() => tasks.canRunAutomatic() && Date.now() >= rewardCalibrationUntil ? balances.tick() : undefined).catch(error => console.error("Balance automatic task failed:", String(error))).finally(() => { busy = false; });
       }, 5000);
       app.once("will-quit", () => { clearInterval(repositoryTimer); taskTray.destroy(); void bridge.stop().catch(() => {}); void repository.dispose(); });
+      let workbenchClosed = false;
+      let workbenchClosing = false;
       app.on("before-quit", (event) => {
         quitting = true;
         if (busy) {
           event.preventDefault(); quitting = false; showWindow();
           void dialog.showMessageBox(window, {type:"info",message:"本地操作尚未完成",detail:"当前操作收尾后可以从托盘彻底退出。",buttons:["返回控制台"],noLink:true});
+          return;
+        }
+        if (!workbenchClosed) {
+          event.preventDefault();
+          if (!workbenchClosing) {
+            workbenchClosing = true;
+            void workbench.close().finally(() => { workbenchClosed = true; app.quit(); });
+          }
         }
       });
       let closing = false;

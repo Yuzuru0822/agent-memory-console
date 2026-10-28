@@ -182,6 +182,10 @@ export class AgentBridge {
     if (remote) await this.remoteOperation(task.id, "SendMessage", { message: { messageId, role: "ROLE_USER", parts: [{ text: content }] }, configuration: { returnImmediately: true }, metadata: { agentConsoleBridge: { hop: 1 } } });
     return structuredClone(this.accessTask(task.id));
   }
+  /** Main-process dispatch only. Runtime mapping is persisted before claiming. */
+  claimForExecution(taskId: string, actor: AgentId): BridgeTask {
+    this.guard(); this.policy(actor); return this.claim(taskId, actor);
+  }
   private claim(taskId: string, actor: AgentId): BridgeTask {
     const task = this.accessTask(taskId, actor);
     if (task.target !== actor || terminal.has(task.state) || task.delivery === "unknown") throw new RpcError(-32602, "任务不能由此身份领取");

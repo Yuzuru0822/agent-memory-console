@@ -1,6 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ConsoleApi } from "../src/shared";
 const api: ConsoleApi = {
+  workbenchSnapshot: () => ipcRenderer.invoke("console:workbenchSnapshot"),
+  workbenchSaveAgent: agent => ipcRenderer.invoke("console:workbenchSaveAgent", agent),
+  workbenchSaveAccount: input => ipcRenderer.invoke("console:workbenchSaveAccount", input),
+  workbenchNewSession: id => ipcRenderer.invoke("console:workbenchNewSession", id),
+  workbenchSession: id => ipcRenderer.invoke("console:workbenchSession", id),
+  workbenchSend: (id, text) => ipcRenderer.invoke("console:workbenchSend", id, text),
+  workbenchCancel: id => ipcRenderer.invoke("console:workbenchCancel", id),
+  workbenchApprove: (id, allow) => ipcRenderer.invoke("console:workbenchApprove", id, allow),
+  workbenchArchive: id => ipcRenderer.invoke("console:workbenchArchive", id),
+  workbenchPick: kind => ipcRenderer.invoke("console:workbenchPick", kind),
+  workbenchDispatch: (task, agent) => ipcRenderer.invoke("console:workbenchDispatch", task, agent),
+  workbenchDiff: id => ipcRenderer.invoke("console:workbenchDiff", id),
+  workbenchWorktree: (id, branch) => ipcRenderer.invoke("console:workbenchWorktree", id, branch),
+  workbenchRemember: (id, text) => ipcRenderer.invoke("console:workbenchRemember", id, text),
   mcpSnapshot: () => ipcRenderer.invoke("console:mcpSnapshot"),
   mcpSaveTemplates: json => ipcRenderer.invoke("console:mcpSaveTemplates", json),
   mcpSetVariable: (name, value) => ipcRenderer.invoke("console:mcpSetVariable", name, value),

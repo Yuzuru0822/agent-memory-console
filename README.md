@@ -1,5 +1,7 @@
 # Agent Memory Console
 
+> **v1.0.0-rc.1 开发候选版**：新增 Agent 工作台、多实例、加密持久化会话、API 原生工具循环、Claude 对话、OpenClaw 接入、MCP 审批和 A2A 授权派发。使用方式、限制与正式版验收门槛见 [v1.0 工作台说明](docs/V1-WORKBENCH.md)。尚未发布 Windows 正式安装包。下文 v0.x 段落保留原有功能说明。
+
 用于 Windows 的本地 Agent 管理控制台，采用 Electron、React 和 TypeScript。深色界面提供七个 Agent 卡片、独立 Git 记忆与技能仓库、双向合并、定时同步、技能 junction 连接、备份与活动日志。v0.4.0 在“积分福利”中增加验证后自动领取、九个平台独立的余额校准与定时监控、低余额提示和采样历史；v0.5.0 新增任务中心、统一暂停、托盘常驻和本地 CSV 报表。v0.6.0 新增共享 MCP 模板、加密私有变量与部署回滚，以及 A2A 文本消息桥。四个平台提供可校准的免费领取流程；其他平台按实际能力说明。v0.7.1 将记忆与技能同步入口统一到“统一仓库”，移除原有共享源同步页面。
 
 这是可运行的本地文件与进程管理工程。Claude Code CLI 按官方文档适配用户级记忆、技能路径及单次任务；v0.2.2 新增 Qoder 的用户技能、CLI 静态指令候选和 IDE EXE 启动，未接入 Qoder CLI 任务或 IDE 自动记忆。WorkBuddy、TRAE、DeepSeek Harness、智谱 Zcode、千问 Work 使用候选路径或手动绑定，尚未验证厂商协议兼容性。界面不会把文件发现结果显示成登录、额度或会话状态。完整范围见 [集成说明](docs/INTEGRATIONS.md)。

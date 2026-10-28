@@ -1,3 +1,4 @@
+import type { WorkbenchApi } from "./workbench-types";
 import type { ClaudeNpmInstallation } from "../electron/claude-npm";
 import type { SkillLink } from "../electron/skill-paths";
 import type { RepositoryApi, RepositoryConfig } from "./repository-types";
@@ -133,7 +134,7 @@ export interface Plan {
 export interface Result {
   message: string;
 }
-export interface ConsoleApi extends RepositoryApi, RewardsApi, RewardBalancesApi, TasksApi, McpApi, BridgeApi {
+export interface ConsoleApi extends WorkbenchApi, RepositoryApi, RewardsApi, RewardBalancesApi, TasksApi, McpApi, BridgeApi {
   snapshot(): Promise<Snapshot>;
   pick(id: AgentId | null, kind: PickKind): Promise<Result>;
   approveNpm(): Promise<Result>;

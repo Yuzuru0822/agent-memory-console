@@ -1,3 +1,4 @@
+import WorkbenchPanel from "./WorkbenchPanel";
 import {
   useEffect,
   useRef,
@@ -50,8 +51,9 @@ import InteropPanel from "./InteropPanel";
 import type { TaskControlsSnapshot } from "./task-types";
 
 const api = window.consoleApi;
-type Tab = "overview" | "tasks" | "repository" | "rewards" | "interop" | "backups" | "activity" | "integrations";
+type Tab = "workbench" | "overview" | "tasks" | "repository" | "rewards" | "interop" | "backups" | "activity" | "integrations";
 const nav = [
+  { id: "workbench", name: "Agent 工作台", icon: Sparkles },
   { id: "overview", name: "监控总览", icon: LayoutDashboard },
   { id: "tasks", name: "任务中心", icon: ListChecks },
   { id: "repository", name: "统一仓库", icon: Database },
@@ -710,6 +712,7 @@ export default function App() {
             {(repositoryOpened || tab === "repository") && <div hidden={tab !== "repository"}>
               <RepositoryPanel onChange={refresh} progress={repositoryProgress} />
             </div>}
+            {tab === "workbench" && <WorkbenchPanel />}
             {tab === "rewards" && <RewardsPanel />}
             {tab === "interop" && <InteropPanel onRepository={() => setTab("repository")} />}
             {tab === "tasks" && <TaskCenterPanel onNavigate={setTab} onControls={snapshot => { setTaskControls(snapshot); setTaskControlsError(undefined); }} />}
@@ -833,7 +836,7 @@ export default function App() {
                 LOCAL FIRST<span>·</span>所有路径与备份保留在本机
               </span>
               <span>
-                AGENT MEMORY CONSOLE <b>v0.7.1</b>
+                AGENT MEMORY CONSOLE <b>v1.0.0-rc.1</b>
               </span>
             </footer>
           </>
